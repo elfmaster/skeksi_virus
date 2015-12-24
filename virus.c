@@ -77,7 +77,7 @@ _start()
 void * vx_malloc(size_t len, uint8_t **mem)
 {
 	if (*mem == NULL) {
-		*mem = _mmap(NULL, 8192 * 4, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+		*mem = _mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
 		if (*mem == MAP_FAILED) {
 			DEBUG_PRINT("malloc failed with mmap\n");
 			Exit(-1);
@@ -86,6 +86,14 @@ void * vx_malloc(size_t len, uint8_t **mem)
 	*mem += len;
 	**mem = 0;
 	return (void *)((char *)*mem - len);
+}
+
+void vx_free(uint8_t *mem)
+{
+	uintptr_t addr = (uintptr_t)mem;
+	addr &= ~4095;
+	mem = (uint8_t *)addr;
+	_munmap(mem, 4096);
 }
 /*
  * We rely on ASLR to get our psuedo randomness, since RSP will be different
