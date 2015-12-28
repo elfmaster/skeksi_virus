@@ -11,6 +11,8 @@ extern long real_start;
 extern long get_rip_label;
 
 unsigned long get_rip(void);
+void end_code(void);
+void dummy_marker(void);
 
 struct bootstrap_data {
 	int argc;
@@ -43,7 +45,8 @@ _start()
 	 */
 	__ASM__ (
 	 ".globl real_start	\n"
- 	 "push %rsp	\n"
+ 	 "real_start:		\n"
+	 "push %rsp	\n"
 	 "push %rbp	\n"
 	 "push %rax	\n"
 	 "push %rbx	\n"
