@@ -25,18 +25,6 @@
 
 #include "private.h"
 
-static unsigned long int r_next = 1;
-
-int _rand(void) // RAND_MAX assumed to be 32767
-{
-	r_next = r_next * 1103515245 + 12345;
-	return (unsigned int)(r_next / 65536) & 32767;
-}
-
-void _srand(unsigned int seed)
-{
-	r_next = seed;
-}
 
 void Memset(void *mem, unsigned char byte, unsigned int len)
 {

