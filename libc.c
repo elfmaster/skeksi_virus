@@ -366,7 +366,6 @@ int create_thread(void (*fn)(void *), void *data)
                  "S" (newstack));
 
         if (retval < 0) {
-                errno = -retval;
                 retval = -1;
         }
         return retval;

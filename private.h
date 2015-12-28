@@ -8,7 +8,6 @@
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <sys/syscall.h>
-#include <errno.h>
 #include <link.h>
 #include <sys/stat.h>
 #include <stdarg.h>

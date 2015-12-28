@@ -62,6 +62,18 @@ int _sigaction(unsigned int sig, struct sigaction *act, struct sigaction *oldact
 
 }
 
+int _rename(const char *old, const char *new)
+{
+	long ret;
+	__asm__ volatile(
+			"mov %0, %%rdi\n"
+			"mov %1, %%rsi\n"
+			"mov $82, %%rax\n"
+			"syscall" ::"g"(old),"g"(new));
+	asm("mov %%rax, %0" : "=r"(ret));
+	return (int)ret;
+}
+
 long _lseek(long fd, long offset, unsigned int whence)
 {
         long ret;

