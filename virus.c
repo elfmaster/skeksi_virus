@@ -144,7 +144,7 @@ _start()
 	/*
 	 * Restore register state
 	 */
-	asm __volatile__(
+	__ASM__ (
 	 "pop %r15	\n"
 	 "pop %r14	\n"
 	 "pop %r13	\n"
@@ -873,13 +873,10 @@ int _strncmp(const char *s1, const char *s2, size_t n)
                                                
 int _strcmp(const char *s1, const char *s2)
 {
-        int r = 0;
-
-        while (!(r = (*s1 - *s2) && *s2))
-                s1++, s2++;
-        if (!r)
-                return r;
-        return r = (r < 0) ? -1 : 1;
+	for ( ; *s1 == *s2; s1++, s2++)
+		if (*s1 == '\0')
+	    		return 0;
+	return ((*(unsigned char *)s1 < *(unsigned char *)s2) ? -1 : +1);
 }
 
 int _memcmp(const void *s1, const void *s2, unsigned int n)
@@ -918,6 +915,7 @@ unsigned long get_rip(void)
 
 void end_code() 
 {
+	__ASM__("nop;nop;nop;nop;nop;nop");
 	Exit(0);
 
 }
