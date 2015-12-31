@@ -181,6 +181,7 @@ _start()
 	 "pop %rax	\n"
 	 "pop %rbp	\n"
 	 "pop %rsp	\n"	
+	 "add $0x8, %rsp\n"
 	 "jmp end_code	" 
 	);
 }
