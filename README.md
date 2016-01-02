@@ -1,6 +1,6 @@
 # skeksi_virus
 
-Devestating and awesome Linux X86_64 ELF Virus
+Linux X86_64 ELF Virus that just might ruin someones day in the wrong hands
 
 ## General about
 
@@ -39,4 +39,8 @@ virus is launched with root privileges it will randomly select one of four direc
 /bin, /usr/bin, /sbin, /usr/sbin. After it picks a target directory it will have a 1 in 10
 chance of infecting each file as it iterates through all of them.
 
+## Nuances and notes
 
+Notice we do store string literals, not just on the stack. This is because the text and data
+segment are merged into a single segment and each time the virus copies itself, it copies
+all of the string data as well.
