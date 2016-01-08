@@ -6,6 +6,8 @@
  * gcc -g -O0 -DANTIDEBUG -DINFECT_PLTGOT  -fno-stack-protector -c virus.c -fpic -o virus.o
  * gcc -N -fno-stack-protector -nostdlib virus.o -o virus
  *
+ * Using -DDEBUG will allow Virus to print debug output
+ *
  * Usage:
  * ./virus
  *
