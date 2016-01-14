@@ -31,18 +31,56 @@ typedef struct elfdesc {
 
 #define TMP ".disinfect_file.xyz"
 
+/*
+ * If we find push/ret, and the address
+ * being pushed is within the text segment
+ * of the regular x86_64 text range per the
+ * default linker script, then we are probably
+ * in good shape. 
+ * note: 0x400000 is the default text base
+ */
+uint32_t locate_orig_entry(elfdesc_t *elf)
+{
+	uint32_t i, entry;
+        uint8_t *mem = elf->mem;
+        for (i = 0; i < elf->st.st_size; i++) {
+                if (mem[0] == 0x68 && mem[5] == 0xc3) {
+			entry = *(uint32_t *)&mem[1];
+			if (entry >= 0x400000 && entry < 0x4fffff) 
+				return entry;
+		}
+	}
+	return 0; // couldn't find it, uh oh!
+}	
+
 uint32_t locate_glibc_init_offset(elfdesc_t *elf)
 {
 	uint32_t i;
 	uint8_t *mem = elf->mem;
+	/*
+	 * Try possibility 1
+	 */
 	for (i = 0; i < elf->st.st_size; i++) {
 		if (
-		mem[0] == 0x41 && mem[1] == 0x57 && 
-		mem[2] == 0x41 && mem[3] == 0x56 && 
-		mem[4] == 0x41 && mem[5] == 0x55 &&
-		mem[6] == 0x41 && mem[7] == 0x54)  // probable glibc initialization code
+		mem[i + 0] == 0x41 && mem[i + 1] == 0x57 && 
+		mem[i + 2] == 0x41 && mem[i + 3] == 0x56 && 
+		mem[i + 4] == 0x41 && mem[i + 5] == 0x55 &&
+		mem[i + 6] == 0x41 && mem[i + 7] == 0x54)  // probable glibc initialization code
 			return i;
 	}
+	
+	/*
+	 * Try possibility 2
+	 */
+	for (i = 0; i < elf->st.st_size; i++) {
+		if (
+		mem[i + 0] == 0x31 && mem[i + 1] == 0xed &&
+		mem[i + 2] == 0x49 && mem[i + 3] == 0x89 &&
+		mem[i + 4] == 0xd1 && mem[i + 5] == 0x5e &&
+		mem[i + 6] == 0x48 && mem[i + 7] == 0x89 && mem[i + 8] == 0xe2)
+			return i;
+	}
+
 	return 0;
 }
 	
@@ -64,8 +102,8 @@ int disinfect(elfdesc_t *elf)
 		printf("unexpected text segment address, this file may not actually be infected\n");
 		return -1;
 	}
+
 	paddingSize = 0x400000 - elf->textVaddr;
-	
 	/*
 	 * PT_PHDR, PT_INTERP were pushed forward in the file
 	 */
@@ -86,37 +124,51 @@ int disinfect(elfdesc_t *elf)
 				phdr[i].p_paddr += paddingSize;
 			} else
 				phdr[i].p_vaddr += paddingSize;
+			/*
+			 * reset segment size for text
+			 */
+			phdr[i].p_filesz -= paddingSize;
+			phdr[i].p_memsz -= paddingSize;
+			phdr[i].p_align = 0x200000;
+			phdr[i + 1].p_align = 0x200000;
 			textfound = 1;
 		}
 	}
+	
+	text_offset = locate_glibc_init_offset(elf);
+
 	/*
 	 * Straighten out section headers
 	 */
-	printf("offset of strtab: %x\n", shdr[elf->ehdr->e_shstrndx].sh_offset);
 	strtab = (char *)&mem[shdr[elf->ehdr->e_shstrndx].sh_offset];
-	printf("strtab: %p\n", strtab);
 	for (i = 0; i < elf->ehdr->e_shnum; i++) {
-		printf("shdr[%d].sh_name: %d\n", shdr[i].sh_name);
 		/*
 	 	 * We treat .text section special because it is modified to 
 		 * encase the entire parasite code. Lets change it back to 
 		 * only encasing the regular .text stuff.
 		 */
 		if (!strcmp(&strtab[shdr[i].sh_name], ".text")) {
-			text_offset = locate_glibc_init_offset(elf);
 			if (text_offset == 0) // leave unchanged :(
 				continue;
-			shdr[i].sh_offset = text_offset;
-			shdr[i].sh_addr = text_offset + 0x400000;
-			shdr[i].sh_size -= paddingSize;
+			shdr[i].sh_offset = text_offset - paddingSize;
+			shdr[i].sh_addr = (text_offset - paddingSize) + 0x400000;
 			continue;
 		}
 		shdr[i].sh_offset -= paddingSize;
 	}
 	
+	/*
+	 * Set phdr and shdr table back
+	 */
 	elf->ehdr->e_shoff -= paddingSize;
 	elf->ehdr->e_phoff -= paddingSize;
-                 
+           
+	/*
+	 * Set original entry point
+	 */
+	elf->ehdr->e_entry = 0x400000 + text_offset;
+      	elf->ehdr->e_entry -= paddingSize;
+
 	if ((fd = open(TMP, O_CREAT | O_TRUNC | O_WRONLY, elf->st.st_mode)) < 0) 
 		return -1;
 
@@ -132,7 +184,7 @@ int disinfect(elfdesc_t *elf)
 	if (fchown(fd, elf->st.st_uid, elf->st.st_gid) < 0)
 		return -1;
 
-	rename(elf->path, TMP);
+	rename(TMP, elf->path);
 	return 0;
 }
 
@@ -209,7 +261,8 @@ int main(int argc, char **argv)
 		printf("File: %s, is not infected with the Skeksi virus\n", argv[1]);
 		exit(-1);
 	}
-	
+	printf("File: %s, is infected with the skeksi virus! Attempting to disinfect\n", argv[1]);
+
 	if (disinfect(&elf) < 0) {
 		printf("Failed to disinfect file: %s\n", argv[1]);
 		exit(-1);

