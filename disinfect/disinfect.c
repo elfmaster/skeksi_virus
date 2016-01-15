@@ -1,3 +1,21 @@
+/*
+ * Skeksi Virus disinfector, by ElfMaster. January 2016
+ *
+ * -= About:
+ * This disinfector is the first prototype, it is written for those who may have been so unfortunate
+ * as to infect their own system. The disinfector will work any infected ET_EXEC file, provided that
+ * it has section headers. This is somewhat of a weakness considering the Virus itself works on executables
+ * that have no section headers. If you need to change this, its pretty easy, just parse the program
+ * headers and get PT_DYNAMIC, and then use the D_TAG's to find the PLT/GOT, Relocation, and dynamic
+ * symbol table. 
+ *
+ * -= Usage:
+ * gcc -O2 skeksi_disinfect.c -o disinfect
+ * ./disinfect <executable>
+
+ * elfmaster [4t] zoho.com
+ */
+
 #include <stdarg.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -8,13 +26,9 @@
 #include <fcntl.h>
 #include <dirent.h>
 #include <sys/mman.h>
-#include <sys/syscall.h>
 #include <sys/stat.h>
 #include <elf.h>
 #include <errno.h>
-#include <pthread.h>
-#include <sys/ptrace.h>
-#include <sys/user.h>
 
 typedef struct elfdesc {
 	Elf64_Ehdr *ehdr;
@@ -58,21 +72,7 @@ uint32_t locate_glibc_init_offset(elfdesc_t *elf)
 {
 	uint32_t i;
 	uint8_t *mem = elf->mem;
-	/*
-	 * Try possibility 1
-	 */
-	for (i = 0; i < elf->st.st_size; i++) {
-		if (
-		mem[i + 0] == 0x41 && mem[i + 1] == 0x57 && 
-		mem[i + 2] == 0x41 && mem[i + 3] == 0x56 && 
-		mem[i + 4] == 0x41 && mem[i + 5] == 0x55 &&
-		mem[i + 6] == 0x41 && mem[i + 7] == 0x54)  // probable glibc initialization code
-			return i;
-	}
 	
-	/*
-	 * Try possibility 2
-	 */
 	for (i = 0; i < elf->st.st_size; i++) {
 		if (
 		mem[i + 0] == 0x31 && mem[i + 1] == 0xed &&
@@ -104,21 +104,18 @@ int disinfect_pltgot(elfdesc_t *elf)
 	for (i = 0; i < ehdr->e_shnum; i++) {
 		switch(shdr[i].sh_type) {
 			case SHT_DYNSYM:
-				printf("Found symbol table\n");
 				symtab = (Elf64_Sym *)&mem[shdr[i].sh_offset];
 				symtab_size = shdr[i].sh_size;
 				strtab = (char *)&mem[shdr[shdr[i].sh_link].sh_offset];
 				break;
 			case SHT_RELA:
 				if (!strcmp(&shstrtab[shdr[i].sh_name], ".rela.plt")) {
-					printf("Found relocation entries\n");
 					rela = (Elf64_Rela *)&mem[shdr[i].sh_offset];
 					rela_size = shdr[i].sh_size;
 				}
 				break;	
 			case SHT_PROGBITS:
 				if (!strcmp(&shstrtab[shdr[i].sh_name], ".plt")) {
-					printf("Found procedure linkage table\n");
 					plt_off = shdr[i].sh_offset;
 					plt_addr = shdr[i].sh_addr;
 					plt_size = shdr[i].sh_size;
@@ -131,35 +128,31 @@ int disinfect_pltgot(elfdesc_t *elf)
 		return -1;
 	}
 	
-	printf("analyzing PLT/GOT\n");
 	plt = &mem[plt_off]; // point at PLT, right past PLT-0
 	for (i = 0; i < rela_size/sizeof(Elf64_Rela); i++) {
 		
 		symindex = ELF64_R_SYM(rela->r_info);
-		printf("symindex: %d\n", symindex);
 		if (!strcmp(&strtab[symtab[ELF64_R_SYM(rela->r_info)].st_name], "puts")) {
-			printf("Found relocation for puts()\n");
+			printf("Attempting to disinfect PLT/GOT\n");
 			gotoff = elf->dataOff + (rela->r_offset - elf->dataVaddr);
 			gotptr = &mem[gotoff];
 			addr = gotptr[0] + (gotptr[1] << 8) + (gotptr[2] << 16) + (gotptr[3] << 24);
-			printf("addr found in GOT: %lx\n", addr);
 			if (!(addr >= plt_addr && addr < plt_addr + plt_size)) {
-				printf("addr: %lx is outside of the PLT range, hence infectuous\n", addr);
-				/* addr is pointing outside of the PLT !!! */
 				for (c = 0, j = 0; j < plt_size; j += 16, c++) {
 					if (c == symindex) {
-						printf("Found PLT entry at %lx\n", plt_addr + j);
+						printf("Successfully disinfected PLT/GOT table\n");
 						*(uint32_t *)gotptr = plt_addr + j + 6;
+						return 0;
 					}	
 				}	
 
 			}
+			printf("Failed to disinfect PLT/GOT table\n");
+			return -1;
 		}
 	}
-
-
-
-
+	
+	return 0;
 }
 
 /*
