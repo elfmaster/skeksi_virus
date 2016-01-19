@@ -250,30 +250,31 @@ normal:
 
 /*
  * Heap areas are created by passing a NULL initialized
- * pointer by reference.  Each heap area maxes out at 4k
- * and it is up to the caller of vx_malloc() to keep track
- * of how much space has been used. For our uses this is
- * perfect.
+ * pointer by reference.
  */
+#define CHUNK_SIZE 256
 void * vx_malloc(size_t len, uint8_t **mem)
 {
 	if (*mem == NULL) {
-		*mem = _mmap(NULL, 8192, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+		*mem = _mmap(NULL, 0x200000, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
 		if (*mem == MAP_FAILED) {
 			DEBUG_PRINT("malloc failed with mmap\n");
 			Exit(-1);
 		}
 	}
-	*mem += len;
+	*mem += CHUNK_SIZE;
 	return (void *)((char *)*mem - len);
 }
 
 static inline void vx_free(uint8_t *mem)
 {
 	uintptr_t addr = (uintptr_t)mem;
-	addr &= ~8191;
+	if ((addr & 0x000000000fff) == 0) {
+		_munmap(mem, 0x200000);
+		return;
+	}
+	addr -= CHUNK_SIZE;
 	mem = (uint8_t *)addr;
-	_munmap(mem, 8192);
 }
 
 static inline int _rand(long *seed) // RAND_MAX assumed to be 32767
