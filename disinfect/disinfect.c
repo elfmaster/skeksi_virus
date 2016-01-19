@@ -180,6 +180,12 @@ int disinfect(elfdesc_t *elf)
 	 * Remove PLT/GOT hooks if present
 	 */
 	int ret = disinfect_pltgot(elf);
+	
+	/*
+	 * Remove infection magic
+	 */
+	*(uint32_t *)&elf->ehdr->e_ident[EI_PAD] = 0x00000000;
+
 	/*
 	 * PT_PHDR, PT_INTERP were pushed forward in the file
 	 */
