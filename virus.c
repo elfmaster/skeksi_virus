@@ -787,7 +787,7 @@ infect:
 		goto rescan;
 	}
 
-	rnum = get_random_number(10);
+	rnum = get_random_number(50);
 	if (rnum == LUCKY_NUMBER) 
 		display_skeksi();
 	
