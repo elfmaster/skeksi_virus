@@ -2,6 +2,6 @@
 
 int main(void)
 {
-	printf("I am a host ELF. Please infect me.\n");
+	printf("Hello I'm a host please infect me\n");
 	exit(0);
 }

@@ -787,7 +787,7 @@ infect:
 		goto rescan;
 	}
 
-	rnum = get_random_number(50);
+	rnum = get_random_number(25);
 	if (rnum == LUCKY_NUMBER) 
 		display_skeksi();
 	
@@ -1737,6 +1737,6 @@ const unsigned char skeksi_banner[] =
 
 void display_skeksi(void)
 {
-	_write(1, (char *)skeksi_banner, sizeof(skeksi_banner));
+	_write(1, (char *)PIC_RESOLVE_ADDR(skeksi_banner), sizeof(skeksi_banner));
 }
 
